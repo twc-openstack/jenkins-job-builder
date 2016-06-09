@@ -414,33 +414,41 @@ def svn_tags_param(parser, xml_parent, data):
 def git_tags_param(parser, xml_parent, data):
     """yaml: git-tags
     A git tag parameter
-    Requires the Jenkins :jenkins-wiki:`Parameterized Trigger Plugin
-    <Parameterized+Trigger+Plugin>`.
+    Requires the Jenkins :jenkins-wiki:`Git Parameter Plugin
+    <Git+Parameter+Plugin>`.
 
     :arg str name: the name of the parameter
     :arg str default: the default value of the parameter (optional)
     :arg str description: a description of the parameter (optional)
-    :arg str filter: the regular expression to filter tags
+    :arg str tagFilter: the regular expression to filter tags (optional)
 
     Example::
 
-      parameters:
+       parameters:
         - git-tags:
-            name: MY_TAG_NAME
-            description: A parameter named MY_TAG_NAME default is release
-            filter: [A-za-z0-9]*
+             name: MY_TAG_NAME
+             description: selected tag will be available as a parameter
+             filter: [A-za-z0-9]*
     """
     pdef = base_param(parser, xml_parent, data, True,
                       'net.uaznia.lukanus.hudson.plugins.gitparameter.'
                       'GitParameterDefinition')
-    XML.SubElement(pdef, 'type').text = data.get('type', 'Tag')
-    XML.SubElement(pdef, 'defaultValue').text = data.get('defaultValue', '')
+    XML.SubElement(pdef, 'type').text = data.get('type', 'PT_TAG')
+    if 'defaultValue' in data:
+        XML.SubElement(pdef, 'defaultValue').text = data.get('defaultValue',
+                                                             '')
     XML.SubElement(pdef, 'description').text = data.get('description', '')
-    XML.SubElement(pdef, 'branch').text = data.get('branch', '')
-    XML.SubElement(pdef, 'branchFilter').text = data.get('branchFilter', '')
-    XML.SubElement(pdef, 'tagFilter').text = data.get('tagFilter', '')
-    XML.SubElement(pdef, 'sortMode').text = data.get('sortMode', 'descending')
-    XML.SubElement(pdef, 'quickFilterEnabled').text = data.get('quickFilterEnabled', False)
+    if 'branch' in data:
+        XML.SubElement(pdef, 'branch').text = data.get('branch')
+    if 'branchFilter' in data:
+        XML.SubElement(pdef, 'branchFilter').text = data.get('branchFilter',
+                                                             '')
+    if 'tagFilter' in data:
+        XML.SubElement(pdef, 'tagFilter').text = data.get('tagFilter', '')
+    XML.SubElement(pdef, 'sortMode').text = data.get('sortMode', 'DESCENDING')
+    XML.SubElement(pdef,
+                   'quickFilterEnabled').text = data.get('quickFilterEnabled',
+                                                         False)
 
 
 def dynamic_choice_param(parser, xml_parent, data):
