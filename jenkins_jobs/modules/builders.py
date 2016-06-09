@@ -36,21 +36,23 @@ Example::
 
 """
 
-
+import logging
 import xml.etree.ElementTree as XML
+
+from jenkins_jobs.errors import InvalidAttributeError
+from jenkins_jobs.errors import JenkinsJobsException
+from jenkins_jobs.errors import MissingAttributeError
 import jenkins_jobs.modules.base
-from jenkins_jobs.modules import hudson_model
+from jenkins_jobs.modules.helpers import append_git_revision_config
+import pkg_resources
 from jenkins_jobs.modules.helpers import cloudformation_init
 from jenkins_jobs.modules.helpers import cloudformation_region_dict
 from jenkins_jobs.modules.helpers import cloudformation_stack
 from jenkins_jobs.modules.helpers import config_file_provider_builder
 from jenkins_jobs.modules.helpers import config_file_provider_settings
-from jenkins_jobs.modules.helpers import copyartifact_build_selector
 from jenkins_jobs.modules.helpers import convert_mapping_to_xml
-from jenkins_jobs.errors import (JenkinsJobsException,
-                                 MissingAttributeError,
-                                 InvalidAttributeError)
-import logging
+from jenkins_jobs.modules.helpers import copyartifact_build_selector
+from jenkins_jobs.modules import hudson_model
 
 logger = logging.getLogger(__name__)
 
@@ -94,6 +96,9 @@ def copyartifact(parser, xml_parent, data):
     Copy artifact from another project. Requires the :jenkins-wiki:`Copy
     Artifact plugin <Copy+Artifact+Plugin>`.
 
+    Please note using the multijob-build for which-build argument requires
+    the :jenkins-wiki:`Multijob plugin <Multijob+Plugin>`
+
     :arg str project: Project to copy from
     :arg str filter: what files to copy
     :arg str target: Target base directory for copy, blank means use workspace
@@ -115,6 +120,8 @@ def copyartifact(parser, xml_parent, data):
             * **permalink**
             * **workspace-latest**
             * **build-param**
+            * **downstream-build**
+            * **multijob-build**
 
     :arg str build-number: specifies the build number to get when
         when specific-build is specified as which-build
@@ -135,6 +142,11 @@ def copyartifact(parser, xml_parent, data):
         last successful build when upstream-build is specified as which-build
     :arg string param: specifies to use a build parameter to get the build when
         build-param is specified as which-build
+    :arg str upstream-project-name: specifies the project name of downstream
+        when downstream-build is specified as which-build
+    :arg str upstream-build-number: specifies the number of the build to
+        find its downstream build when downstream-build is specified as
+        which-build
     :arg string parameter-filters: Filter matching jobs based on these
         parameters (optional)
 
@@ -142,6 +154,11 @@ def copyartifact(parser, xml_parent, data):
     Example:
 
     .. literalinclude:: ../../tests/builders/fixtures/copy-artifact001.yaml
+       :language: yaml
+
+    Multijob Example:
+
+    .. literalinclude:: ../../tests/builders/fixtures/copy-artifact004.yaml
        :language: yaml
     """
     t = XML.SubElement(xml_parent, 'hudson.plugins.copyartifact.CopyArtifact')
@@ -376,8 +393,11 @@ def trigger_builds(parser, xml_parent, data):
         Plugin (optional)
     :arg bool svn-revision: Whether to pass the svn revision to the triggered
         job (optional)
-    :arg bool git-revision: Whether to pass the git revision to the triggered
-        job (optional)
+    :arg dict git-revision: Passes git revision to the triggered job
+        (optional).
+
+        * **combine-queued-commits** (bool): Whether to combine queued git
+          hashes or not (default false)
     :arg bool block: whether to wait for the triggered jobs to finish or not
         (default false)
     :arg dict block-thresholds: Fail builds and/or mark as failed or unstable
@@ -479,12 +499,10 @@ def trigger_builds(parser, xml_parent, data):
             XML.SubElement(tconfigs,
                            'hudson.plugins.parameterizedtrigger.'
                            'SubversionRevisionBuildParameters')
+
         if(project_def.get('git-revision')):
-            params = XML.SubElement(tconfigs,
-                                    'hudson.plugins.git.'
-                                    'GitRevisionBuildParameters')
-            combine = XML.SubElement(params, 'combineQueuedCommits')
-            combine.text = 'false'
+            append_git_revision_config(tconfigs, project_def['git-revision'])
+
         if(project_def.get('same-node')):
             XML.SubElement(tconfigs,
                            'hudson.plugins.parameterizedtrigger.'
@@ -683,6 +701,127 @@ def builders_from(parser, xml_parent, data):
     XML.SubElement(pbs, 'projectName').text = data
 
 
+def http_request(parser, xml_parent, data):
+    """yaml: http-request
+    This plugin sends a http request to an url with some parameters.
+    Requires the Jenkins :jenkins-wiki:`HTTP Request Plugin
+    <HTTP+Request+Plugin>`.
+
+    :arg str url: Specify an URL to be requested (required)
+    :arg str mode: The http mode of the request (default GET)
+
+        :mode values:
+            * **GET**
+            * **POST**
+            * **PUT**
+            * **DELETE**
+            * **HEAD**
+    :arg str content-type: Add 'Content-type: foo' HTTP request headers
+        where foo is the http content-type the request is using.
+        (default: NOT_SET)
+    :arg str accept-type: Add 'Accept: foo' HTTP request headers
+        where foo is the http content-type to accept (default: NOT_SET)
+
+        :content-type and accept-type values:
+            * **NOT_SET**
+            * **TEXT_HTML**
+            * **APPLICATION_JSON**
+            * **APPLICATION_TAR**
+            * **APPLICATION_ZIP**
+            * **APPLICATION_OCTETSTREAM**
+    :arg str output-file: Name of the file in which to write response data
+        (default: '')
+    :arg int time-out: Specify a timeout value in seconds (default: 0)
+    :arg bool console-log: This allows you to turn off writing the response
+        body to the log (default: False)
+    :arg bool pass-build: Should build parameters be passed to the URL
+        being called (default: False)
+    :arg str valid-response-codes: Configure response code to mark an
+        execution as success. You can configure simple code such as "200"
+        or multiple codes separeted by comma(',') e.g. "200,404,500"
+        Interval of codes should be in format From:To e.g. "100:399".
+        The default (as if empty) is to fail to 4xx and 5xx.
+        That means success from 100 to 399 "100:399"
+        To ignore any response code use "100:599". (default: '')
+    :arg str valid-response-content: If set response must contain this string
+        to mark an execution as success (default: '')
+    :arg str authentication-key: Authentication that will be used before this
+        request. Authentications are created in global configuration under a
+        key name that is selected here.
+    :arg list custom-headers: list of header parameters
+
+        :custom-header:
+            * **name** (`str`) -- Name of the header
+            * **value** (`str`) -- Value of the header
+
+    Example:
+
+    .. literalinclude:: ../../tests/builders/fixtures/http-request-minimal.yaml
+       :language: yaml
+
+    .. literalinclude::
+       ../../tests/builders/fixtures/http-request-complete.yaml
+       :language: yaml
+    """
+
+    http_request = XML.SubElement(xml_parent,
+                                  'jenkins.plugins.http__request.HttpRequest')
+    http_request.set('plugin', 'http_request')
+
+    valid_modes = ['GET',
+                   'POST',
+                   'PUT',
+                   'DELETE',
+                   'HEAD']
+    valid_types = ['NOT_SET',
+                   'TEXT_HTML',
+                   'APPLICATION_JSON',
+                   'APPLICATION_TAR',
+                   'APPLICATION_ZIP',
+                   'APPLICATION_OCTETSTREAM']
+
+    if data.get('mode', valid_modes[0]) not in valid_modes:
+        raise InvalidAttributeError('mode', data.get('mode'), valid_modes)
+    if data.get('content-type', valid_types[0]) not in valid_types:
+        raise InvalidAttributeError('content-type',
+                                    data.get('content-type'),
+                                    valid_types)
+    if data.get('accept-type', valid_types[0]) not in valid_types:
+        raise InvalidAttributeError('accept-type',
+                                    data.get('accept-type'),
+                                    valid_types)
+
+    mappings = [
+        ('url', 'url', None),
+        ('mode', 'httpMode', 'GET'),
+        ('content-type', 'contentType', 'NOT_SET'),
+        ('accept-type', 'acceptType', 'NOT_SET'),
+        ('output-file', 'outputFile', ''),
+        ('console-log', 'consoleLogResponseBody', False),
+        ('pass-build', 'passBuildParameters', False),
+        ('time-out', 'timeout', 0),
+        ('valid-response-codes', 'validResponseCodes', ''),
+        ('valid-response-content', 'validResponseContent', '')]
+    convert_mapping_to_xml(http_request, data, mappings, fail_required=True)
+
+    if 'authentication-key' in data:
+        XML.SubElement(
+            http_request, 'authentication').text = data['authentication-key']
+
+    if 'custom-headers' in data:
+        customHeader = XML.SubElement(http_request, 'customHeaders')
+        header_mappings = [
+            ('name', 'name', None),
+            ('value', 'value', None)
+        ]
+        for customhead in data['custom-headers']:
+            pair = XML.SubElement(customHeader, 'pair')
+            convert_mapping_to_xml(pair,
+                                   customhead,
+                                   header_mappings,
+                                   fail_required=True)
+
+
 def inject(parser, xml_parent, data):
     """yaml: inject
     Inject an environment for the job.
@@ -765,6 +904,38 @@ def artifact_resolver(parser, xml_parent, data):
     XML.SubElement(ar, 'releaseUpdatePolicy').text = 'never'
     XML.SubElement(ar, 'snapshotChecksumPolicy').text = 'warn'
     XML.SubElement(ar, 'releaseChecksumPolicy').text = 'warn'
+
+
+def doxygen(parser, xml_parent, data):
+    """yaml: doxygen
+    Builds doxygen HTML documentation. Requires the Jenkins
+    :jenkins-wiki:`Doxygen plugin <Doxygen+Plugin>`.
+
+    :arg str doxyfile: The doxyfile path (required)
+    :arg str install: The doxygen installation to use (required)
+    :arg bool ignore-failure: Keep executing build even on doxygen generation
+        failure (default false)
+    :arg bool unstable-warning: Mark the build as unstable if warnings are
+        generated (default false)
+
+    Example:
+
+    .. literalinclude:: /../../tests/builders/fixtures/doxygen001.yaml
+       :language: yaml
+
+    """
+    doxygen = XML.SubElement(xml_parent,
+                             'hudson.plugins.doxygen.DoxygenBuilder')
+    try:
+        XML.SubElement(doxygen, 'doxyfilePath').text = str(data['doxyfile'])
+        XML.SubElement(doxygen, 'installationName').text = str(data['install'])
+    except KeyError as e:
+        raise MissingAttributeError(e.arg[0])
+
+    XML.SubElement(doxygen, 'continueOnBuildFailure').text = str(
+        data.get('ignore-failure', False)).lower()
+    XML.SubElement(doxygen, 'unstableIfWarnings').text = str(
+        data.get('unstable-warning', False)).lower()
 
 
 def gradle(parser, xml_parent, data):
@@ -1423,14 +1594,15 @@ def maven_builder(parser, xml_parent, data):
     """yaml: maven-builder
     Execute Maven3 builder
 
+    Allows your build jobs to deploy artifacts automatically to Artifactory.
+
+    Requires the Jenkins :jenkins-wiki:`Artifactory Plugin
+    <Artifactory+Plugin>`.
+
     :arg str name: Name of maven installation from the configuration
     :arg str pom: Location of pom.xml (default 'pom.xml')
     :arg str goals: Goals to execute
     :arg str maven-opts: Additional options for maven (optional)
-
-    Requires the Jenkins `Artifactory Plugin
-    <https://wiki.jenkins-ci.org/display/JENKINS/Artifactory+Plugin>`_
-    allows your build jobs to deploy artifacts automatically to Artifactory.
 
     Example:
 
@@ -1452,7 +1624,11 @@ def maven_builder(parser, xml_parent, data):
 
 def maven_target(parser, xml_parent, data):
     """yaml: maven-target
-    Execute top-level Maven targets
+    Execute top-level Maven targets.
+
+    Requires the Jenkins :jenkins-wiki:`Config File Provider Plugin
+    <Config+File+Provider+Plugin>` for the Config File Provider "settings"
+    and "global-settings" config.
 
     :arg str goals: Goals to execute
     :arg str properties: Properties for maven, can have multiples
@@ -1469,10 +1645,6 @@ def maven_target(parser, xml_parent, data):
     :arg str global-settings: Path to use as global settings.xml
         It is possible to provide a ConfigFileProvider settings file, such as
         see CFP Example below. (optional)
-
-    Requires the Jenkins `Config File Provider Plugin
-    <https://wiki.jenkins-ci.org/display/JENKINS/Config+File+Provider+Plugin>`_
-    for the Config File Provider "settings" and "global-settings" config.
 
     Example:
 
@@ -1510,7 +1682,7 @@ def multijob(parser, xml_parent, data):
 
     :arg str name: MultiJob phase name
     :arg str condition: when to trigger the other job.
-        Can be: 'SUCCESSFUL', 'UNSTABLE', 'COMPLETED', 'FAILURE'.
+        Can be: 'SUCCESSFUL', 'UNSTABLE', 'COMPLETED', 'FAILURE', 'ALWAYS'.
         (default 'SUCCESSFUL')
 
     :arg list projects: list of projects to include in the MultiJob phase
@@ -1525,17 +1697,24 @@ def multijob(parser, xml_parent, data):
             * **node-label** (`str`) -- Define a label
               of 'Restrict where this project can be run' on the fly.
               Requires NodeLabel Parameter Plugin (optional)
+            * **node-parameters** (`bool`) -- Use the same Node for
+              the triggered builds that was used for this build. (optional)
             * **git-revision** (`bool`) -- Pass current git-revision
               to the other job (default false)
             * **property-file** (`str`) -- Pass properties from file
               to the other job (optional)
             * **predefined-parameters** (`str`) -- Pass predefined
               parameters to the other job (optional)
+            * **abort-all-job** (`bool`) -- Kill allsubs job and the phase job,
+              if this subjob is killed (default false)
             * **enable-condition** (`str`) -- Condition to run the
               job in groovy script format (optional)
             * **kill-phase-on** (`str`) -- Stop the phase execution
               on specific job status. Can be 'FAILURE', 'UNSTABLE',
               'NEVER'. (optional)
+            * **restrict-matrix-project** (`str`) -- Filter that
+              restricts the subset of the combinations that the
+              downstream project will run (optional)
 
     Example:
 
@@ -1547,7 +1726,8 @@ def multijob(parser, xml_parent, data):
     XML.SubElement(builder, 'phaseName').text = data['name']
 
     condition = data.get('condition', 'SUCCESSFUL')
-    conditions_available = ('SUCCESSFUL', 'UNSTABLE', 'COMPLETED', 'FAILURE')
+    conditions_available = ('SUCCESSFUL', 'UNSTABLE', 'COMPLETED', 'FAILURE',
+                            'ALWAYS')
     if condition not in conditions_available:
         raise JenkinsJobsException('Multijob condition must be one of: %s.'
                                    % ', '.join(conditions_available))
@@ -1579,6 +1759,11 @@ def multijob(parser, xml_parent, data):
             XML.SubElement(node, 'name').text = nodeLabelName
             XML.SubElement(node, 'nodeLabel').text = nodeLabel
 
+        # Node parameter
+        if project.get('node-parameters', False):
+            XML.SubElement(configs, 'hudson.plugins.parameterizedtrigger.'
+                                    'NodeParameters')
+
         # Git Revision
         if project.get('git-revision', False):
             param = XML.SubElement(configs,
@@ -1608,6 +1793,18 @@ def multijob(parser, xml_parent, data):
                                    'PredefinedBuildParameters')
             properties = XML.SubElement(param, 'properties')
             properties.text = predefined_parameters
+
+        # Abort all other job
+        abortAllJob = str(project.get('abort-all-job', False)).lower()
+        XML.SubElement(phaseJob, 'abortAllJob').text = abortAllJob
+
+        # Restrict matrix jobs to a subset
+        if project.get('restrict-matrix-project') is not None:
+            subset = XML.SubElement(
+                configs, 'hudson.plugins.parameterizedtrigger.'
+                         'matrix.MatrixSubsetBuildParameters')
+            XML.SubElement(
+                subset, 'filter').text = project['restrict-matrix-project']
 
         # Enable Condition
         enable_condition = project.get('enable-condition')
@@ -1947,6 +2144,32 @@ def shining_panda(parser, xml_parent, data):
     XML.SubElement(t, 'ignoreExitCode').text = str(ignore_exit_code).lower()
 
 
+def tox(parser, xml_parent, data):
+    """yaml: tox
+    Use tox to build a multi-configuration project. Requires the Jenkins
+    :jenkins-wiki:`ShiningPanda plugin <ShiningPanda+Plugin>`.
+
+    :arg str ini: The TOX configuration file path (default: tox.ini)
+    :arg bool recreate: If true, create a new environment each time (default:
+        false)
+    :arg str toxenv-pattern: The pattern used to build the TOXENV environment
+        variable. (optional)
+
+    Example:
+
+    .. literalinclude:: /../../tests/builders/fixtures/tox001.yaml
+       :language: yaml
+    """
+    pluginelement = 'jenkins.plugins.shiningpanda.builders.ToxBuilder'
+    t = XML.SubElement(xml_parent, pluginelement)
+    XML.SubElement(t, 'toxIni').text = data.get('ini', 'tox.ini')
+    XML.SubElement(t, 'recreate').text = str(
+        data.get('recreate', False)).lower()
+    pattern = data.get('toxenv-pattern')
+    if pattern:
+        XML.SubElement(t, 'toxenvPattern').text = pattern
+
+
 def managed_script(parser, xml_parent, data):
     """yaml: managed-script
     This step allows to reference and execute a centrally managed
@@ -1993,25 +2216,23 @@ def managed_script(parser, xml_parent, data):
 
 def cmake(parser, xml_parent, data):
     """yaml: cmake
-    Execute a CMake target. Requires the Hudson `cmakebuilder Plugin.
-    <http://wiki.hudson-ci.org/display/HUDSON/cmakebuilder+Plugin>`_
+    Execute a CMake target. Requires the Jenkins :jenkins-wiki:`CMake Plugin
+    <CMake+Plugin>`.
+
+    This builder is compatible with both versions 2.x and 1.x of the
+    plugin. When specifying paramenters from both versions only the ones from
+    the installed version in Jenkins will be used, and the rest will be
+    ignored.
 
     :arg str source-dir: the source code directory relative to the workspace
         directory. (required)
-    :arg str build-dir: The directory where the project will be built in.
-        Relative to the workspace directory. (optional)
-    :arg list install-dir: The directory where the project will be installed
-        in, relative to the workspace directory. (optional)
-    :arg list build-type: Sets the "build type" option. A custom type different
-        than the default ones specified on the CMake plugin can also be set,
-        which will be automatically used in the "Other Build Type" option of
-        the plugin. (default Debug)
-
-        :type Default types present in the CMake plugin:
-            * **Debug**
-            * **Release**
-            * **RelWithDebInfo**
-            * **MinSizeRel**
+    :arg str build-type: Sets the "build type" option for CMake (default
+        "Debug").
+    :arg str preload-script: Path to a CMake preload script file. (optional)
+    :arg str other-arguments: Other arguments to be added to the CMake
+        call. (optional)
+    :arg bool clean-build-dir: If true, delete the build directory before each
+        build (default false).
 
     :arg list generator: The makefile generator (default "Unix Makefiles").
 
@@ -2034,20 +2255,68 @@ def cmake(parser, xml_parent, data):
             * **Visual Studio 9 2008 Win64**
             * **Watcom WMake**
 
-    :arg str make-command: The make command (default "make").
-    :arg str install-command: The install command (default "make install").
-    :arg str preload-script: Path to a CMake preload script file. (optional)
-    :arg str other-arguments: Other arguments to be added to the CMake
-        call. (optional)
-    :arg str custom-cmake-path: Path to cmake executable. (optional)
-    :arg bool clean-build-dir: If true, delete the build directory before each
-        build (default false).
-    :arg bool clean-install-dir: If true, delete the install dir before each
-        build (default false).
+    :Version 2.x: Parameters that available only to versions 2.x of the plugin
 
-    Example:
+        * **working-dir** (`str`): The directory where the project will be
+          built in. Relative to the workspace directory. (optional)
+        * **installation-name** (`str`): The CMake installation to be used on
+          this builder. Use one defined in your Jenkins global configuration
+          page (default "InSearchPath").
+        * **build-tool-invocations** (`list`): list of build tool invocations
+          that will happen during the build:
 
-    .. literalinclude:: ../../tests/builders/fixtures/cmake-complete.yaml
+            :Build tool invocations:
+                * **use-cmake** (`str`) -- Whether to run the actual build tool
+                    directly (by expanding ``$CMAKE_BUILD_TOOL``) or to have
+                    cmake run the build tool (by invoking ``cmake --build
+                    <dir>``) (default false).
+                * **arguments** (`str`) -- Specify arguments to pass to the
+                    build tool or cmake (separated by spaces). Arguments may
+                    contain spaces if they are enclosed in double
+                    quotes. (optional)
+                * **environment-variables** (`str`) -- Specify extra
+                    environment variables to pass to the build tool as
+                    key-value pairs here. Each entry must be on its own line,
+                    for example:
+
+                      ``DESTDIR=${WORKSPACE}/artifacts/dir``
+
+                      ``KEY=VALUE``
+
+    :Version 1.x: Parameters available only to versions 1.x of the plugin
+
+        * **build-dir** (`str`): The directory where the project will be built
+          in.  Relative to the workspace directory. (optional)
+        * **install-dir** (`str`): The directory where the project will be
+          installed in, relative to the workspace directory. (optional)
+        * **build-type** (`list`): Sets the "build type" option. A custom type
+          different than the default ones specified on the CMake plugin can
+          also be set, which will be automatically used in the "Other Build
+          Type" option of the plugin. (default "Debug")
+
+            :Default types present in the CMake plugin:
+                * **Debug**
+                * **Release**
+                * **RelWithDebInfo**
+                * **MinSizeRel**
+
+        * **make-command** (`str`): The make command (default "make").
+        * **install-command** (`arg`): The install command (default "make
+          install").
+        * **custom-cmake-path** (`str`): Path to cmake executable. (optional)
+        * **clean-install-dir** (`bool`): If true, delete the install dir
+          before each build (default false).
+
+    Example (Versions 2.x):
+
+    .. literalinclude::
+        ../../tests/builders/fixtures/cmake/version-2.0/complete-2.x.yaml
+       :language: yaml
+
+    Example (Versions 1.x):
+
+    .. literalinclude::
+        ../../tests/builders/fixtures/cmake/version-1.10/complete-1.x.yaml
        :language: yaml
     """
 
@@ -2061,61 +2330,96 @@ def cmake(parser, xml_parent, data):
     except KeyError:
         raise MissingAttributeError('source-dir')
 
-    build_dir = XML.SubElement(cmake, 'buildDir')
-    build_dir.text = data.get('build-dir', '')
+    XML.SubElement(cmake, 'generator').text = str(
+        data.get('generator', "Unix Makefiles"))
 
-    install_dir = XML.SubElement(cmake, 'installDir')
-    install_dir.text = data.get('install-dir', '')
+    XML.SubElement(cmake, 'preloadScript').text = str(
+        data.get('preload-script', ''))
 
-    # The options buildType and otherBuildType work together on the CMake
-    # plugin:
-    #  * If the passed value is one of the predefined values, set buildType to
-    #    it and otherBuildType to blank;
-    #  * Otherwise, set otherBuildType to the value, and buildType to
-    #    "Debug". The CMake plugin will ignore the buildType option.
-    #
-    # It is strange and confusing that the plugin author chose to do something
-    # like that instead of simply passing a string "buildType" option, so this
-    # was done to simplify it for the JJB user.
-    build_type = XML.SubElement(cmake, 'buildType')
-    build_type.text = data.get('build-type', BUILD_TYPES[0])
+    XML.SubElement(cmake, 'cleanBuild').text = str(
+        data.get('clean-build-dir', False)).lower()
 
-    other_build_type = XML.SubElement(cmake, 'otherBuildType')
+    plugin_info = parser.registry.get_plugin_info("CMake plugin")
+    version = pkg_resources.parse_version(plugin_info.get("version", "1.0"))
 
-    if(build_type.text not in BUILD_TYPES):
-        other_build_type.text = build_type.text
-        build_type.text = BUILD_TYPES[0]
+    # Version 2.x breaks compatibility. So parse the input data differently
+    # based on it:
+    if version >= pkg_resources.parse_version("2.0"):
+        XML.SubElement(cmake, 'workingDir').text = str(
+            data.get('working-dir', ''))
+
+        XML.SubElement(cmake, 'buildType').text = str(
+            data.get('build-type', 'Debug'))
+
+        XML.SubElement(cmake, 'installationName').text = str(
+            data.get('installation-name', 'InSearchPath'))
+
+        XML.SubElement(cmake, 'toolArgs').text = str(
+            data.get('other-arguments', ''))
+
+        tool_steps = XML.SubElement(cmake, 'toolSteps')
+
+        for step_data in data.get('build-tool-invocations', []):
+            tagname = 'hudson.plugins.cmake.BuildToolStep'
+            step = XML.SubElement(tool_steps, tagname)
+
+            XML.SubElement(step, 'withCmake').text = str(
+                step_data.get('use-cmake', False)).lower()
+
+            XML.SubElement(step, 'args').text = str(
+                step_data.get('arguments', ''))
+
+            XML.SubElement(step, 'vars').text = str(
+                step_data.get('environment-variables', ''))
+
     else:
-        other_build_type.text = ''
+        build_dir = XML.SubElement(cmake, 'buildDir')
+        build_dir.text = data.get('build-dir', '')
 
-    generator = XML.SubElement(cmake, 'generator')
-    generator.text = data.get('generator', "Unix Makefiles")
+        install_dir = XML.SubElement(cmake, 'installDir')
+        install_dir.text = data.get('install-dir', '')
 
-    make_command = XML.SubElement(cmake, 'makeCommand')
-    make_command.text = data.get('make-command', 'make')
+        # The options buildType and otherBuildType work together on the CMake
+        # plugin:
+        #  * If the passed value is one of the predefined values, set buildType
+        #    to it and otherBuildType to blank;
+        #  * Otherwise, set otherBuildType to the value, and buildType to
+        #    "Debug". The CMake plugin will ignore the buildType option.
+        #
+        # It is strange and confusing that the plugin author chose to do
+        # something like that instead of simply passing a string "buildType"
+        # option, so this was done to simplify it for the JJB user.
+        build_type = XML.SubElement(cmake, 'buildType')
+        build_type.text = data.get('build-type', BUILD_TYPES[0])
 
-    install_command = XML.SubElement(cmake, 'installCommand')
-    install_command.text = data.get('install-command', 'make install')
+        other_build_type = XML.SubElement(cmake, 'otherBuildType')
 
-    preload_script = XML.SubElement(cmake, 'preloadScript')
-    preload_script.text = data.get('preload-script', '')
+        if(build_type.text not in BUILD_TYPES):
+            other_build_type.text = build_type.text
+            build_type.text = BUILD_TYPES[0]
+        else:
+            other_build_type.text = ''
 
-    other_cmake_args = XML.SubElement(cmake, 'cmakeArgs')
-    other_cmake_args.text = data.get('other-arguments', '')
+        make_command = XML.SubElement(cmake, 'makeCommand')
+        make_command.text = data.get('make-command', 'make')
 
-    custom_cmake_path = XML.SubElement(cmake, 'projectCmakePath')
-    custom_cmake_path.text = data.get('custom-cmake-path', '')
+        install_command = XML.SubElement(cmake, 'installCommand')
+        install_command.text = data.get('install-command', 'make install')
 
-    clean_build_dir = XML.SubElement(cmake, 'cleanBuild')
-    clean_build_dir.text = str(data.get('clean-build-dir', False)).lower()
+        other_cmake_args = XML.SubElement(cmake, 'cmakeArgs')
+        other_cmake_args.text = data.get('other-arguments', '')
 
-    clean_install_dir = XML.SubElement(cmake, 'cleanInstallDir')
-    clean_install_dir.text = str(data.get('clean-install-dir',
-                                          False)).lower()
+        custom_cmake_path = XML.SubElement(cmake, 'projectCmakePath')
+        custom_cmake_path.text = data.get('custom-cmake-path', '')
 
-    # The plugin generates this tag, but there doesn't seem to be anything
-    # that can be configurable by it. Let's keep it to mantain compatibility:
-    XML.SubElement(cmake, 'builderImpl')
+        clean_install_dir = XML.SubElement(cmake, 'cleanInstallDir')
+        clean_install_dir.text = str(data.get('clean-install-dir',
+                                              False)).lower()
+
+        # The plugin generates this tag, but there doesn't seem to be anything
+        # that can be configurable by it. Let's keep it to maintain
+        # compatibility:
+        XML.SubElement(cmake, 'builderImpl')
 
 
 def dsl(parser, xml_parent, data):
@@ -2124,10 +2428,10 @@ def dsl(parser, xml_parent, data):
 
     Requires the Jenkins :jenkins-wiki:`Job DSL plugin <Job+DSL+Plugin>`.
 
-    :arg str script-text: dsl script which is Groovy code (required if target
+    :arg str script-text: dsl script which is Groovy code (Required if targets
         is not specified)
-    :arg str target: Newline separated list of DSL scripts, located in the
-        Workspace. Can use wildcards like 'jobs/\*\*/\*.groovy' (required
+    :arg str targets: Newline separated list of DSL scripts, located in the
+        Workspace. Can use wildcards like 'jobs/\*/\*/\*.groovy' (Required
         if script-text is not specified)
     :arg str ignore-existing: Ignore previously generated jobs and views
     :arg str removed-job-action: Specifies what to do when a previously
@@ -2155,11 +2459,21 @@ def dsl(parser, xml_parent, data):
     dsl = XML.SubElement(xml_parent,
                          'javaposse.jobdsl.plugin.ExecuteDslScripts')
 
+    if 'target' in data:
+        if 'targets' not in data:
+            logger.warn("Converting from old format of 'target' to new "
+                        "name 'targets', please update your job definitions.")
+            data['targets'] = data['target']
+        else:
+            logger.warn("Ignoring old argument 'target' in favour of new "
+                        "format argument 'targets', please remove old "
+                        "format.")
+
     if data.get('script-text'):
         XML.SubElement(dsl, 'scriptText').text = data.get('script-text')
         XML.SubElement(dsl, 'usingScriptText').text = 'true'
-    elif data.get('target'):
-        XML.SubElement(dsl, 'targets').text = data.get('target')
+    elif data.get('targets'):
+        XML.SubElement(dsl, 'targets').text = data.get('targets')
         XML.SubElement(dsl, 'usingScriptText').text = 'false'
     else:
         raise MissingAttributeError(['script-text', 'target'])
@@ -2215,8 +2529,7 @@ def github_notifier(parser, xml_parent, data):
 def ssh_builder(parser, xml_parent, data):
     """yaml: ssh-builder
     Executes command on remote host
-    Requires the Jenkins `SSH plugin.
-    <https://wiki.jenkins-ci.org/display/JENKINS/SSH+plugin>`_
+    Requires the Jenkins :jenkins-wiki:`SSH plugin <SSH+plugin>`.
 
     :arg str ssh-user-ip: user@ip:ssh_port of machine that was defined
         in jenkins according to SSH plugin instructions
@@ -2240,7 +2553,10 @@ def sonar(parser, xml_parent, data):
     """yaml: sonar
     Invoke standalone Sonar analysis.
     Requires the Jenkins `Sonar Plugin.
-    <http://docs.codehaus.org/pages/viewpage.action?pageId=116359341>`_
+    <http://docs.sonarqube.org/display/SCAN/\
+        Analyzing+with+SonarQube+Scanner+for+Jenkins\
+        #AnalyzingwithSonarQubeScannerforJenkins-\
+        AnalyzingwiththeSonarQubeScanner>`_
 
     :arg str sonar-name: Name of the Sonar installation.
     :arg str task: Task to run. (optional)
@@ -2270,53 +2586,78 @@ def sonatype_clm(parser, xml_parent, data):
     Requires the Jenkins :jenkins-wiki:`Sonatype CLM Plugin
     <Sonatype+CLM+%28formerly+Insight+for+CI%29>`.
 
+    :arg str value: Select CLM application from a list of available CLM
+        applications or specify CLM Application ID (default: list)
     :arg str application-name: Determines the policy elements to associate
         with this build. (required)
+    :arg str username: Username on the Sonatype CLM server. Leave empty to
+        use the username configured at global level. (default: '')
+    :arg str password: Password on the Sonatype CLM server. Leave empty to
+        use the password configured at global level. (default: '')
     :arg bool fail-on-clm-server-failure: Controls the build outcome if there
-        is a failure in communicating with the CLM server. (default false)
+        is a failure in communicating with the CLM server. (default: False)
     :arg str stage: Controls the stage the policy evaluation will be run
         against on the CLM server. Valid stages: build, stage-release, release,
-        operate. (default 'build')
-    :arg str scan-targets: Pattern of files to include for scanning. (optional)
-    :arg str module-excludes: Pattern of files to exclude. (optional)
+        operate. (default: 'build')
+    :arg str scan-targets: Pattern of files to include for scanning.
+        (default: '')
+    :arg str module-excludes: Pattern of files to exclude. (default: '')
     :arg str advanced-options: Options to be set on a case-by-case basis as
-        advised by Sonatype Support. (optional)
+        advised by Sonatype Support. (default: '')
 
-    Example:
+    Minimal Example:
 
-    .. literalinclude:: /../../tests/builders/fixtures/sonatype-clm01.yaml
+    .. literalinclude::
+        /../../tests/builders/fixtures/sonatype-clm-minimal.yaml
+       :language: yaml
+
+    Full Example:
+
+    .. literalinclude::
+        /../../tests/builders/fixtures/sonatype-clm-complete.yaml
        :language: yaml
     """
     clm = XML.SubElement(xml_parent,
                          'com.sonatype.insight.ci.hudson.PreBuildScan')
     clm.set('plugin', 'sonatype-clm-ci')
 
-    if 'application-name' not in data:
-        raise MissingAttributeError("application-name",
-                                    "builders.sonatype-clm")
-    XML.SubElement(clm, 'billOfMaterialsToken').text = str(
-        data['application-name'])
-    XML.SubElement(clm, 'failOnClmServerFailures').text = str(
-        data.get('fail-on-clm-server-failure', False)).lower()
-
+    SUPPORTED_VALUES = ['list', 'manual']
+    clm_value = data.get('value')
+    if clm_value and clm_value not in SUPPORTED_VALUES:
+        raise InvalidAttributeError('value',
+                                    clm_value,
+                                    SUPPORTED_VALUES)
     SUPPORTED_STAGES = ['build', 'stage-release', 'release', 'operate']
-    stage = str(data.get('stage', 'build')).lower()
-    if stage not in SUPPORTED_STAGES:
-        raise InvalidAttributeError("stage",
-                                    stage,
-                                    "builders.sonatype-clm",
+    clm_stage = data.get('stage')
+    if clm_stage and clm_stage not in SUPPORTED_STAGES:
+        raise InvalidAttributeError('stage',
+                                    clm_stage,
                                     SUPPORTED_STAGES)
-    XML.SubElement(clm, 'stageId').text = stage
 
-    # Path Configs
-    path_config = XML.SubElement(clm,
-                                 'pathConfig')
-    XML.SubElement(path_config, 'scanTargets').text = str(
-        data.get('scan-targets', '')).lower()
-    XML.SubElement(path_config, 'moduleExcludes').text = str(
-        data.get('module-excludes', '')).lower()
-    XML.SubElement(path_config, 'scanProperties').text = str(
-        data.get('advanced-options', '')).lower()
+    application_select = XML.SubElement(clm,
+                                        'applicationSelectType')
+    application_mappings = [
+        ('value', 'value', 'list'),
+        ('application-name', 'applicationId', None),
+    ]
+    convert_mapping_to_xml(
+        application_select, data, application_mappings, fail_required=True)
+
+    path = XML.SubElement(clm, 'pathConfig')
+    path_mappings = [
+        ('scan-targets', 'scanTargets', ''),
+        ('module-excludes', 'moduleExcludes', ''),
+        ('advanced-options', 'scanProperties', ''),
+    ]
+    convert_mapping_to_xml(path, data, path_mappings, fail_required=True)
+
+    mappings = [
+        ('fail-on-clm-server-failure', 'failOnClmServerFailures', False),
+        ('stage', 'stageId', 'build'),
+        ('username', 'username', ''),
+        ('password', 'password', ''),
+    ]
+    convert_mapping_to_xml(clm, data, mappings, fail_required=True)
 
 
 def beaker(parser, xml_parent, data):
@@ -2407,8 +2748,8 @@ def openshift_build_verify(parser, xml_parent, data):
     provided buildConfig key provided; once the list of builds are obtained,
     the state of the latest build is inspected for up to a minute to see if
     it has completed successfully.
-    Requires the Jenkins `OpenShift3 Plugin
-    <https://github.com/gabemontero/openshift-jenkins-buildutils/>`_
+    Requires the Jenkins :jenkins-wiki:`OpenShift
+    Pipeline Plugin <OpenShift+Pipeline+Plugin>`.
 
     :arg str api-url: this would be the value you specify if you leverage the
         --server option on the OpenShift `oc` command.
@@ -2420,6 +2761,8 @@ def openshift_build_verify(parser, xml_parent, data):
         "namespace", that is the value you want to put here. (default 'test')
     :arg str auth-token: The value here is what you supply with the --token
         option when invoking the OpenShift `oc` command. (optional)
+    :arg str verbose: This flag is the toggle for
+        turning on or off detailed logging in this plug-in. (default 'false')
 
     Full Example:
 
@@ -2434,14 +2777,15 @@ def openshift_build_verify(parser, xml_parent, data):
        :language: yaml
     """
     osb = XML.SubElement(xml_parent,
-                         'com.openshift.'
-                         'openshiftjenkinsbuildutils.OpenShiftBuildVerifier')
+                         'com.openshift.jenkins.plugins.pipeline.'
+                         'OpenShiftBuildVerifier')
     mapping = [
         # option, xml name, default value
         ("api-url", 'apiURL', 'https://openshift.default.svc.cluster.local'),
         ("bld-cfg", 'bldCfg', 'frontend'),
         ("namespace", 'namespace', 'test'),
         ("auth-token", 'authToken', ''),
+        ("verbose", 'verbose', 'false'),
     ]
 
     convert_mapping_to_xml(osb, data, mapping)
@@ -2450,8 +2794,8 @@ def openshift_build_verify(parser, xml_parent, data):
 def openshift_builder(parser, xml_parent, data):
     """yaml: openshift-builder
     Perform builds in OpenShift for the job.
-    Requires the Jenkins `OpenShift3 Plugin
-    <https://github.com/gabemontero/openshift-jenkins-buildutils/>`_
+    Requires the Jenkins :jenkins-wiki:`OpenShift
+    Pipeline Plugin <OpenShift+Pipeline+Plugin>`.
 
     :arg str api-url: this would be the value you specify if you leverage the
         --server option on the OpenShift `oc` command.
@@ -2463,8 +2807,17 @@ def openshift_builder(parser, xml_parent, data):
         "namespace", that is the value you want to put here. (default 'test')
     :arg str auth-token: The value here is what you supply with the --token
         option when invoking the OpenShift `oc` command. (optional)
-    :arg bool follow-log: The equivalent of using the --follow option with the
-        `oc start-build` command. (default true)
+    :arg str commit-ID: The value here is what you supply with the
+        --commit option when invoking the
+        OpenShift `oc start-build` command. (optional)
+    :arg str verbose: This flag is the toggle for
+        turning on or off detailed logging in this plug-in. (default 'false')
+    :arg str build-name: TThe value here is what you supply with the
+        --from-build option when invoking the
+        OpenShift `oc start-build` command. (optional)
+    :arg str show-build-logs: Indicates whether the build logs get dumped
+        to the console of the Jenkins build. (default 'false')
+
 
     Full Example:
 
@@ -2477,8 +2830,8 @@ def openshift_builder(parser, xml_parent, data):
        :language: yaml
     """
     osb = XML.SubElement(xml_parent,
-                         'com.openshift.'
-                         'openshiftjenkinsbuildutils.OpenShiftBuilder')
+                         'com.openshift.jenkins.plugins.pipeline.'
+                         'OpenShiftBuilder')
 
     mapping = [
         # option, xml name, default value
@@ -2486,7 +2839,58 @@ def openshift_builder(parser, xml_parent, data):
         ("bld-cfg", 'bldCfg', 'frontend'),
         ("namespace", 'namespace', 'test'),
         ("auth-token", 'authToken', ''),
-        ("follow-log", 'followLog', 'true'),
+        ("commit-ID", 'commitID', ''),
+        ("verbose", 'verbose', 'false'),
+        ("build-name", 'buildName', ''),
+        ("show-build-logs", 'showBuildLogs', 'false'),
+    ]
+
+    convert_mapping_to_xml(osb, data, mapping)
+
+
+def openshift_creator(parser, xml_parent, data):
+    """yaml: openshift-creator
+    Performs the equivalent of an oc create command invocation;
+    this build step takes in the provided JSON or YAML text, and if it
+    conforms to OpenShift schema, creates whichever
+    OpenShift resources are specified.
+    Requires the Jenkins :jenkins-wiki:`OpenShift
+    Pipeline Plugin <OpenShift+Pipeline+Plugin>`.
+
+    :arg str api-url: this would be the value you specify if you leverage the
+        --server option on the OpenShift `oc` command.
+        (default '\https://openshift.default.svc.cluster.local')
+    :arg str jsonyaml: The JSON or YAML formatted text that conforms to
+        the schema for defining the various OpenShift resources. (optional)
+    :arg str namespace: If you run `oc get bc` for the project listed in
+        "namespace", that is the value you want to put here. (default 'test')
+    :arg str auth-token: The value here is what you supply with the --token
+        option when invoking the OpenShift `oc` command. (optional)
+    :arg str verbose: This flag is the toggle for
+        turning on or off detailed logging in this plug-in. (default 'false')
+
+    Full Example:
+
+    .. literalinclude::
+        ../../tests/builders/fixtures/openshift-creator001.yaml
+       :language: yaml
+
+    Minimal Example:
+
+    .. literalinclude::
+        ../../tests/builders/fixtures/openshift-creator002.yaml
+       :language: yaml
+    """
+    osb = XML.SubElement(xml_parent,
+                         'com.openshift.jenkins.plugins.pipeline.'
+                         'OpenShiftCreator')
+    mapping = [
+        # option, xml name, default value
+        ("api-url", 'apiURL', 'https://openshift.default.svc.cluster.local'),
+        ("jsonyaml", 'jsonyaml', ''),
+        ("namespace", 'namespace', 'test'),
+        ("auth-token", 'authToken', ''),
+        ("verbose", 'verbose', 'false'),
     ]
 
     convert_mapping_to_xml(osb, data, mapping)
@@ -2497,8 +2901,8 @@ def openshift_dep_verify(parser, xml_parent, data):
     Determines whether the expected set of DeploymentConfig's,
     ReplicationController's, and active replicas are present based on prior
     use of the scaler (2) and deployer (3) steps
-    Requires the Jenkins `OpenShift3 Plugin
-    <https://github.com/gabemontero/openshift-jenkins-buildutils/>`_
+    Requires the Jenkins :jenkins-wiki:`OpenShift
+    Pipeline Plugin <OpenShift+Pipeline+Plugin>`._
 
     :arg str api-url: this would be the value you specify if you leverage the
         --server option on the OpenShift `oc` command.
@@ -2512,6 +2916,8 @@ def openshift_dep_verify(parser, xml_parent, data):
         of pods you want started for the deployment. (default 0)
     :arg str auth-token: The value here is what you supply with the --token
         option when invoking the OpenShift `oc` command. (optional)
+    :arg str verbose: This flag is the toggle for
+        turning on or off detailed logging in this plug-in. (default 'false')
 
     Full Example:
 
@@ -2526,8 +2932,7 @@ def openshift_dep_verify(parser, xml_parent, data):
        :language: yaml
     """
     osb = XML.SubElement(xml_parent,
-                         'com.openshift.'
-                         'openshiftjenkinsbuildutils.'
+                         'com.openshift.jenkins.plugins.pipeline.'
                          'OpenShiftDeploymentVerifier')
 
     mapping = [
@@ -2537,6 +2942,7 @@ def openshift_dep_verify(parser, xml_parent, data):
         ("namespace", 'namespace', 'test'),
         ("replica-count", 'replicaCount', 0),
         ("auth-token", 'authToken', ''),
+        ("verbose", 'verbose', 'false'),
     ]
 
     convert_mapping_to_xml(osb, data, mapping)
@@ -2545,8 +2951,8 @@ def openshift_dep_verify(parser, xml_parent, data):
 def openshift_deployer(parser, xml_parent, data):
     """yaml: openshift-deployer
     Start a deployment in OpenShift for the job.
-    Requires the Jenkins `OpenShift3 Plugin
-    <https://github.com/gabemontero/openshift-jenkins-buildutils/>`_
+    Requires the Jenkins :jenkins-wiki:`OpenShift
+    Pipeline Plugin <OpenShift+Pipeline+Plugin>`.
 
     :arg str api-url: this would be the value you specify if you leverage the
         --server option on the OpenShift `oc` command.
@@ -2558,6 +2964,8 @@ def openshift_deployer(parser, xml_parent, data):
         "namespace", that is the value you want to put here. (default 'test')
     :arg str auth-token: The value here is what you supply with the --token
         option when invoking the OpenShift `oc` command. (optional)
+    :arg str verbose: This flag is the toggle for
+        turning on or off detailed logging in this plug-in. (default 'false')
 
     Full Example:
 
@@ -2572,8 +2980,8 @@ def openshift_deployer(parser, xml_parent, data):
        :language: yaml
     """
     osb = XML.SubElement(xml_parent,
-                         'com.openshift.'
-                         'openshiftjenkinsbuildutils.OpenShiftDeployer')
+                         'com.openshift.jenkins.plugins.pipeline.'
+                         'OpenShiftDeployer')
 
     mapping = [
         # option, xml name, default value
@@ -2581,6 +2989,7 @@ def openshift_deployer(parser, xml_parent, data):
         ("dep-cfg", 'depCfg', 'frontend'),
         ("namespace", 'namespace', 'test'),
         ("auth-token", 'authToken', ''),
+        ("verbose", 'verbose', 'false'),
     ]
 
     convert_mapping_to_xml(osb, data, mapping)
@@ -2590,8 +2999,8 @@ def openshift_img_tagger(parser, xml_parent, data):
     """yaml: openshift-img-tagger
     Performs the equivalent of an oc tag command invocation in order to
     manipulate tags for images in OpenShift ImageStream's
-    Requires the Jenkins `OpenShift3 Plugin
-    <https://github.com/gabemontero/openshift-jenkins-buildutils/>`_
+    Requires the Jenkins :jenkins-wiki:`OpenShift
+    Pipeline Plugin <OpenShift+Pipeline+Plugin>`.
 
     :arg str api-url: this would be the value you specify if you leverage the
         --server option on the OpenShift `oc` command.
@@ -2606,6 +3015,8 @@ def openshift_img_tagger(parser, xml_parent, data):
         "namespace", that is the value you want to put here. (default 'test')
     :arg str auth-token: The value here is what you supply with the --token
         option when invoking the OpenShift `oc` command. (optional)
+    :arg str verbose: This flag is the toggle for
+        turning on or off detailed logging in this plug-in. (default 'false')
 
     Full Example:
 
@@ -2620,8 +3031,8 @@ def openshift_img_tagger(parser, xml_parent, data):
        :language: yaml
     """
     osb = XML.SubElement(xml_parent,
-                         'com.openshift.'
-                         'openshiftjenkinsbuildutils.OpenShiftImageTagger')
+                         'com.openshift.jenkins.plugins.pipeline.'
+                         'OpenShiftImageTagger')
 
     mapping = [
         # option, xml name, default value
@@ -2630,6 +3041,7 @@ def openshift_img_tagger(parser, xml_parent, data):
         ("prod-tag", 'prodTag', 'origin-nodejs-sample:prod'),
         ("namespace", 'namespace', 'test'),
         ("auth-token", 'authToken', ''),
+        ("verbose", 'verbose', 'false'),
     ]
 
     convert_mapping_to_xml(osb, data, mapping)
@@ -2638,8 +3050,8 @@ def openshift_img_tagger(parser, xml_parent, data):
 def openshift_scaler(parser, xml_parent, data):
     """yaml: openshift-scaler
     Scale deployments in OpenShift for the job.
-    Requires the Jenkins `OpenShift3 Plugin
-    <https://github.com/gabemontero/openshift-jenkins-buildutils/>`_
+    Requires the Jenkins :jenkins-wiki:`OpenShift
+    Pipeline Plugin <OpenShift+Pipeline+Plugin>`.
 
     :arg str api-url: this would be the value you specify if you leverage the
         --server option on the OpenShift `oc` command.
@@ -2653,6 +3065,8 @@ def openshift_scaler(parser, xml_parent, data):
         of pods you want started for the deployment. (default 0)
     :arg str auth-token: The value here is what you supply with the --token
         option when invoking the OpenShift `oc` command. (optional)
+    :arg str verbose: This flag is the toggle for
+        turning on or off detailed logging in this plug-in. (default 'false')
 
     Full Example:
 
@@ -2665,8 +3079,8 @@ def openshift_scaler(parser, xml_parent, data):
        :language: yaml
     """
     osb = XML.SubElement(xml_parent,
-                         'com.openshift.'
-                         'openshiftjenkinsbuildutils.OpenShiftScaler')
+                         'com.openshift.jenkins.plugins.pipeline.'
+                         'OpenShiftScaler')
 
     mapping = [
         # option, xml name, default value
@@ -2675,6 +3089,7 @@ def openshift_scaler(parser, xml_parent, data):
         ("namespace", 'namespace', 'test'),
         ("replica-count", 'replicaCount', 0),
         ("auth-token", 'authToken', ''),
+        ("verbose", 'verbose', 'false'),
     ]
 
     convert_mapping_to_xml(osb, data, mapping)
@@ -2683,8 +3098,8 @@ def openshift_scaler(parser, xml_parent, data):
 def openshift_svc_verify(parser, xml_parent, data):
     """yaml: openshift-svc-verify
     Verify a service is up in OpenShift for the job.
-    Requires the Jenkins `OpenShift3 Plugin
-    <https://github.com/gabemontero/openshift-jenkins-buildutils/>`_
+    Requires the Jenkins :jenkins-wiki:`OpenShift
+    Pipeline Plugin <OpenShift+Pipeline+Plugin>`.
 
     :arg str api-url: this would be the value you specify if you leverage the
         --server option on the OpenShift `oc` command.
@@ -2695,6 +3110,8 @@ def openshift_svc_verify(parser, xml_parent, data):
         "namespace", that is the value you want to put here. (default 'test')
     :arg str auth-token: The value here is what you supply with the --token
         option when invoking the OpenShift `oc` command. (optional)
+    :arg str verbose: This flag is the toggle for
+        turning on or off detailed logging in this plug-in. (default 'false')
 
     Full Example:
 
@@ -2709,8 +3126,8 @@ def openshift_svc_verify(parser, xml_parent, data):
        :language: yaml
     """
     osb = XML.SubElement(xml_parent,
-                         'com.openshift.'
-                         'openshiftjenkinsbuildutils.OpenShiftServiceVerifier')
+                         'com.openshift.jenkins.plugins.pipeline.'
+                         'OpenShiftServiceVerifier')
 
     mapping = [
         # option, xml name, default value
@@ -2718,6 +3135,7 @@ def openshift_svc_verify(parser, xml_parent, data):
         ("svc-name", 'svcName', 'frontend'),
         ("namespace", 'namespace', 'test'),
         ("auth-token", 'authToken', ''),
+        ("verbose", 'verbose', 'false'),
     ]
 
     convert_mapping_to_xml(osb, data, mapping)
@@ -2726,8 +3144,7 @@ def openshift_svc_verify(parser, xml_parent, data):
 def runscope(parser, xml_parent, data):
     """yaml: runscope
     Execute a Runscope test.
-    Requires the Jenkins `Runscope Plugin.
-    <https://wiki.jenkins-ci.org/display/JENKINS/Runscope+Plugin>`_
+    Requires the Jenkins :jenkins-wiki:`Runscope Plugin <Runscope+Plugin>`.
 
     :arg str test-trigger-url: Trigger URL for test. (required)
     :arg str access-token: OAuth Personal Access token. (required)
@@ -2747,3 +3164,119 @@ def runscope(parser, xml_parent, data):
     except KeyError as e:
         raise MissingAttributeError(e.args[0])
     XML.SubElement(runscope, 'timeout').text = str(data.get('timeout', '60'))
+
+
+def description_setter(parser, xml_parent, data):
+    """yaml: description-setter
+    This plugin sets the description for each build,
+    based upon a RegEx test of the build log file.
+
+    Requires the Jenkins :jenkins-wiki:`Description Setter Plugin
+    <Description+Setter+Plugin>`.
+
+    :arg str regexp: A RegEx which is used to scan the build log file
+        (default '')
+    :arg str description: The description to set on the build (optional)
+
+    Example:
+
+    .. literalinclude::
+        /../../tests/builders/fixtures/description-setter001.yaml
+       :language: yaml
+    """
+
+    descriptionsetter = XML.SubElement(
+        xml_parent,
+        'hudson.plugins.descriptionsetter.DescriptionSetterBuilder')
+    XML.SubElement(descriptionsetter, 'regexp').text = data.get('regexp', '')
+    if 'description' in data:
+        XML.SubElement(descriptionsetter, 'description').text = data[
+            'description']
+
+
+def docker_build_publish(parse, xml_parent, data):
+    """yaml: docker-build-publish
+    Requires the Jenkins :jenkins-wiki`Docker build publish Plugin
+    <Docker+build+publish+Plugin>`.
+
+    :arg str repo-name: Name of repository to push to.
+    :arg str repo-tag: Tag for image. (default '')
+    :arg bool no-cache: If build should be cached. (default false)
+    :arg bool no-force-pull: Don't update the source image before building when
+        it exists locally. (default false)
+    :arg bool skip-build: Do not build the image. (default false)
+    :arg bool skip-decorate: Do not decorate the build name. (default false)
+    :arg bool skip-tag-latest: Do not tag this build as latest. (default false)
+    :arg bool skip-push: Do not push. (default false)
+    :arg str file-path: Project root of Dockerfile. (default '')
+
+    Example:
+
+    .. literalinclude:: /../../tests/builders/fixtures/docker-builder001.yaml
+    """
+    db = XML.SubElement(xml_parent,
+                        'com.cloudbees.dockerpublish.DockerBuilder')
+    db.set('plugin', 'docker-build-publish')
+
+    try:
+        XML.SubElement(db, 'repoName').text = str(data['repo-name'])
+    except KeyError:
+        raise MissingAttributeError('repo-name')
+
+    XML.SubElement(db, 'repoTag').text = str(data.get('repo-tag', ''))
+    XML.SubElement(db, 'noCache').text = str(
+        data.get('no-cache', False)).lower()
+    XML.SubElement(db, 'noForcePull').text = str(
+        data.get('no-force-pull', False)).lower()
+    XML.SubElement(db, 'skipBuild').text = str(
+        data.get('skip-build', False)).lower()
+    XML.SubElement(db, 'skipDecorate').text = str(
+        data.get('skip-decorate', False)).lower()
+    XML.SubElement(db, 'skipTagLatest').text = str(
+        data.get('skip-tag-latest', False)).lower()
+    XML.SubElement(db, 'skipPush').text = str(
+        data.get('skip-push', False)).lower()
+    XML.SubElement(db, 'dockerfilePath').text = str(
+        data.get('file-path', ''))
+
+
+def build_name_setter(parser, xml_parent, data):
+    """yaml: build-name-setter
+    Define Build Name Setter options which allows your build name to be
+    updated during the build process.
+    Requires the Jenkins :jenkins-wiki:`Build Name Setter Plugin
+    <Build+Name+Setter+Plugin>`.
+
+    :arg str name: Filename to use for Build Name Setter, only used if
+        file bool is true. (default 'version.txt')
+    :arg str template: Macro Template string, only used if macro
+        bool is true. (default '#${BUILD_NUMBER}')
+    :arg bool file: Read from named file (default false)
+    :arg bool macro: Read from macro template (default false)
+    :arg bool macro-first: Insert macro first (default false)
+
+    File Example:
+
+    .. literalinclude::
+        /../../tests/builders/fixtures/build-name-setter001.yaml
+       :language: yaml
+
+    Macro Example:
+
+    .. literalinclude::
+        /../../tests/builders/fixtures/build-name-setter002.yaml
+       :language: yaml
+    """
+    build_name_setter = XML.SubElement(
+        xml_parent,
+        'org.jenkinsci.plugins.buildnameupdater.BuildNameUpdater')
+    XML.SubElement(build_name_setter, 'buildName').text = data.get(
+        'name', 'version.txt')
+    XML.SubElement(build_name_setter, 'macroTemplate').text = data.get(
+        'template', '#${BUILD_NUMBER}')
+    XML.SubElement(build_name_setter, 'fromFile').text = str(
+        data.get('file', False)).lower()
+    XML.SubElement(build_name_setter, 'fromMacro').text = str(
+        data.get('macro', False)).lower()
+    XML.SubElement(build_name_setter, 'macroFirst').text = str(
+        data.get('macro-first', False)).lower()

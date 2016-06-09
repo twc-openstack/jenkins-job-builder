@@ -23,23 +23,135 @@ Wrappers can alter the way the build is run as well as the build output.
 """
 
 import logging
-import xml.etree.ElementTree as XML
 import pkg_resources
+import xml.etree.ElementTree as XML
+
+from jenkins_jobs.errors import InvalidAttributeError
+from jenkins_jobs.errors import JenkinsJobsException
+from jenkins_jobs.errors import MissingAttributeError
 import jenkins_jobs.modules.base
-from jenkins_jobs.errors import (JenkinsJobsException,
-                                 InvalidAttributeError,
-                                 MissingAttributeError)
 from jenkins_jobs.modules.builders import create_builders
-from jenkins_jobs.modules.helpers import config_file_provider_builder
 from jenkins_jobs.modules.helpers import artifactory_common_details
-from jenkins_jobs.modules.helpers import artifactory_repository
 from jenkins_jobs.modules.helpers import artifactory_deployment_patterns
 from jenkins_jobs.modules.helpers import artifactory_env_vars_patterns
 from jenkins_jobs.modules.helpers import artifactory_optional_props
+from jenkins_jobs.modules.helpers import artifactory_repository
+from jenkins_jobs.modules.helpers import config_file_provider_builder
 
 logger = logging.getLogger(__name__)
 
 MIN_TO_SEC = 60
+
+
+def docker_custom_build_env(parser, xml_parent, data):
+    """yaml: docker-custom-build-env
+    Allows the definition of a build environment for a job using a Docker
+    container.
+    Requires the Jenkins :jenkins-wiki:`CloudBees Docker Custom Build
+    Environment Plugin<CloudBees+Docker+Custom+Build+Environment+Plugin>`.
+
+    :arg str image-type: Docker image type. Valid values and their
+        additional attributes described in the image_types_ table
+    :arg str docker-tool: The name of the docker installation to use
+        (default 'Default')
+    :arg str host: URI to the docker host you are using
+    :arg str credentials-id: Argument to specify the ID of credentials to use
+        for docker host (optional)
+    :arg str registry-credentials-id: Argument to specify the ID of
+        credentials to use for docker registry (optional)
+    :arg list volumes: Volumes to bind mound from slave host into container
+
+        :volume: * **host-path** (`str`) Path on host
+                 * **path** (`str`) Path inside container
+
+    :arg bool verbose: Log docker commands executed by plugin on build log
+        (default false)
+    :arg bool privileged: Run in privileged mode (default false)
+    :arg bool force-pull: Force pull (default false)
+    :arg str group: The user to run build has to be the same as the Jenkins
+        slave user so files created in workspace have adequate owner and
+        permission set
+    :arg str command: Container start command (default '/bin/cat')
+    :arg str net: Network bridge (default 'bridge')
+
+    .. _image_types:
+
+    ================== ====================================================
+    Image Type         Description
+    ================== ====================================================
+    dockerfile         Build docker image from a Dockerfile in project
+                       workspace. With this option, project can define the
+                       build environment as a Dockerfile stored in SCM with
+                       project source code
+
+                         :context-path: (str) Path to docker context
+                           (default '.')
+                         :dockerfile: (str) Use an alternate Dockerfile to
+                           build the container hosting this build
+                           (default 'Dockerfile')
+    pull               Pull specified docker image from Docker repository
+
+                         :image: (str) Image id/tag
+    ================== ====================================================
+
+    Example:
+
+    .. literalinclude::
+        /../../tests/wrappers/fixtures/docker-custom-build-env001.yaml
+       :language: yaml
+    """
+    core_prefix = 'com.cloudbees.jenkins.plugins.okidocki.'
+    entry_xml = XML.SubElement(
+        xml_parent, core_prefix + 'DockerBuildWrapper')
+    entry_xml.set('plugin', 'docker-custom-build-environment')
+
+    selectorobj = XML.SubElement(entry_xml, 'selector')
+    image_type = data['image-type']
+    if image_type == 'dockerfile':
+        selectorobj.set('class', core_prefix + 'DockerfileImageSelector')
+        XML.SubElement(selectorobj, 'contextPath').text = data.get(
+            'context-path', '.')
+        XML.SubElement(selectorobj, 'dockerfile').text = data.get(
+            'dockerfile', 'Dockerfile')
+    elif image_type == 'pull':
+        selectorobj.set('class', core_prefix + 'PullDockerImageSelector')
+        XML.SubElement(selectorobj, 'image').text = data.get(
+            'image', '')
+
+    XML.SubElement(entry_xml, 'dockerInstallation').text = data.get(
+        'docker-tool', 'Default')
+
+    host = XML.SubElement(entry_xml, 'dockerHost')
+    host.set('plugin', 'docker-commons')
+    if data.get('host'):
+        XML.SubElement(host, 'uri').text = data['host']
+    if data.get('credentials-id'):
+        XML.SubElement(host, 'credentialsId').text = data['credentials-id']
+    XML.SubElement(entry_xml, 'dockerRegistryCredentials').text = data.get(
+        'registry-credentials-id', '')
+
+    volumesobj = XML.SubElement(entry_xml, 'volumes')
+    volumes = data.get('volumes', [])
+    if not volumes:
+        volumesobj.set('class', 'empty-list')
+    else:
+        for volume in volumes:
+            volumeobj = XML.SubElement(
+                volumesobj, 'com.cloudbees.jenkins.plugins.okidocki.Volume')
+            XML.SubElement(volumeobj, 'hostPath').text = volume['volume'].get(
+                'host-path', '')
+            XML.SubElement(volumeobj, 'path').text = volume['volume'].get(
+                'path', '')
+
+    XML.SubElement(entry_xml, 'forcePull').text = str(data.get(
+        'force-pull', False)).lower()
+    XML.SubElement(entry_xml, 'privileged').text = str(data.get(
+        'privileged', False)).lower()
+    XML.SubElement(entry_xml, 'verbose').text = str(data.get(
+        'verbose', False)).lower()
+    XML.SubElement(entry_xml, 'group').text = data.get('group', '')
+    XML.SubElement(entry_xml, 'command').text = data.get('command', '/bin/cat')
+    XML.SubElement(entry_xml, 'net').text = data.get('net', 'bridge')
 
 
 def ci_skip(parser, xml_parent, data):
@@ -153,6 +265,7 @@ def timeout(parser, xml_parent, data):
         * **no-activity**
         * **elastic**
         * **absolute**
+        * **deadline**
 
     :arg int elastic-percentage: Percentage of the three most recent builds
         where to declare a timeout, only applies to **elastic** type.
@@ -161,6 +274,12 @@ def timeout(parser, xml_parent, data):
         average duration, only applies to **elastic** type. (default 3)
     :arg int elastic-default-timeout: Timeout to use if there were no previous
         builds, only applies to **elastic** type. (default 3)
+
+    :arg str deadline-time: Build terminate automatically at next deadline time
+        (HH:MM:SS), only applies to **deadline** type. (default 0:00:00)
+    :arg int deadline-tolerance: Period in minutes after deadline when a job
+        should be immediately aborted, only applies to **deadline** type.
+        (default 1)
 
     Example (Version < 1.14):
 
@@ -184,6 +303,9 @@ def timeout(parser, xml_parent, data):
     .. literalinclude::
         /../../tests/wrappers/fixtures/timeout/version-1.14/elastic001.yaml
 
+    .. literalinclude::
+        /../../tests/wrappers/fixtures/timeout/version-1.15/deadline001.yaml
+
     """
     prefix = 'hudson.plugins.build__timeout.'
     twrapper = XML.SubElement(xml_parent, prefix + 'BuildTimeoutWrapper')
@@ -192,7 +314,8 @@ def timeout(parser, xml_parent, data):
         "Jenkins build timeout plugin")
     version = pkg_resources.parse_version(plugin_info.get("version", "0"))
 
-    valid_strategies = ['absolute', 'no-activity', 'likely-stuck', 'elastic']
+    valid_strategies = ['absolute', 'no-activity', 'likely-stuck', 'elastic',
+                        'deadline']
 
     if version >= pkg_resources.parse_version("1.14"):
         strategy = data.get('type', 'absolute')
@@ -232,6 +355,18 @@ def timeout(parser, xml_parent, data):
                            ).text = str(data.get('elastic-number-builds', 0))
             XML.SubElement(strategy_element, 'timeoutMinutesElasticDefault'
                            ).text = str(data.get('elastic-default-timeout', 3))
+
+        elif strategy == "deadline":
+            strategy_element = XML.SubElement(
+                twrapper, 'strategy',
+                {'class': "hudson.plugins.build_timeout."
+                          "impl.DeadlineTimeOutStrategy"})
+            deadline_time = str(data.get('deadline-time', '0:00:00'))
+            XML.SubElement(strategy_element,
+                           'deadlineTime').text = str(deadline_time)
+            deadline_tolerance = int(data.get('deadline-tolerance', 1))
+            XML.SubElement(strategy_element, 'deadlineToleranceInMinutes'
+                           ).text = str(deadline_tolerance)
 
         actions = []
 
@@ -331,6 +466,79 @@ def ansicolor(parser, xml_parent, data):
         XML.SubElement(cwrapper, 'colorMapName').text = colormap
 
 
+def build_keeper(parser, xml_parent, data):
+    """yaml: build-keeper
+    Keep builds based on specific policy.
+    Requires the Jenkins :jenkins-wiki:`Build Keeper Plugin
+    <Build+Keeper+Plugin>`.
+
+    :arg str policy: Policy to keep builds.
+
+        :policy values:
+          * **by-day**
+          * **keep-since**
+          * **build-number**
+          * **keep-first-failed**
+    :arg int build-period: Number argument to calculate build to keep,
+        depends on the policy. (default 0)
+    :arg bool dont-keep-failed: Flag to indicate if to keep failed builds.
+        (default False)
+    :arg int number-of-fails: number of consecutive failed builds in order
+        to mark first as keep forever, only applies to keep-first-failed
+        policy (default 0)
+
+    Example:
+
+    .. literalinclude:: /../../tests/wrappers/fixtures/build-keeper0001.yaml
+
+    .. literalinclude:: /../../tests/wrappers/fixtures/build-keeper0002.yaml
+
+    """
+
+    root = XML.SubElement(xml_parent,
+                          'org.jenkins__ci.plugins.build__keeper.BuildKeeper')
+
+    valid_policies = ('by-day', 'keep-since', 'build-number',
+                      'keep-first-failed')
+    policy = data.get('policy')
+    build_period = str(data.get('build-period', 0))
+    dont_keep_failed = str(data.get('dont-keep-failed', False)).lower()
+
+    if policy == 'by-day':
+        policy_element = XML.SubElement(root,
+                                        'policy',
+                                        {'class': 'org.jenkins_ci.plugins.'
+                                         'build_keeper.ByDayPolicy'})
+        XML.SubElement(policy_element, 'buildPeriod').text = build_period
+        XML.SubElement(policy_element,
+                       'dontKeepFailed').text = dont_keep_failed
+    elif policy == 'keep-since':
+        policy_element = XML.SubElement(root,
+                                        'policy',
+                                        {'class': 'org.jenkins_ci.plugins.'
+                                         'build_keeper.KeepSincePolicy'})
+        XML.SubElement(policy_element, 'buildPeriod').text = build_period
+        XML.SubElement(policy_element,
+                       'dontKeepFailed').text = dont_keep_failed
+    elif policy == 'build-number':
+        policy_element = XML.SubElement(root,
+                                        'policy',
+                                        {'class': 'org.jenkins_ci.plugins.'
+                                         'build_keeper.BuildNumberPolicy'})
+        XML.SubElement(policy_element, 'buildPeriod').text = build_period
+        XML.SubElement(policy_element,
+                       'dontKeepFailed').text = dont_keep_failed
+    elif policy == 'keep-first-failed':
+        policy_element = XML.SubElement(root,
+                                        'policy',
+                                        {'class': 'org.jenkins_ci.plugins.'
+                                         'build_keeper.KeepFirstFailedPolicy'})
+        XML.SubElement(policy_element, 'numberOfFails').text = str(
+            data.get('number-of-fails', 0))
+    else:
+        InvalidAttributeError('policy', policy, valid_policies)
+
+
 def live_screenshot(parser, xml_parent, data):
     """yaml: live-screenshot
     Show live screenshots of running jobs in the job list.
@@ -386,18 +594,21 @@ def workspace_cleanup(parser, xml_parent, data):
     :arg list include: list of files to be included
     :arg list exclude: list of files to be excluded
     :arg bool dirmatch: Apply pattern to directories too (default: false)
+    :arg str check-parameter: boolean environment variable to check to
+        determine whether to actually clean up
+    :arg str external-deletion-command: external deletion command to run
+        against files and directories
 
-    Example::
+    Example:
 
-      wrappers:
-        - workspace-cleanup:
-            include:
-              - "*.zip"
+    .. literalinclude::
+        /../../tests/wrappers/fixtures/workspace-cleanup001.yaml
+       :language: yaml
     """
 
     p = XML.SubElement(xml_parent,
                        'hudson.plugins.ws__cleanup.PreBuildCleanup')
-    p.set("plugin", "ws-cleanup@0.14")
+    p.set("plugin", "ws-cleanup")
     if "include" in data or "exclude" in data:
         patterns = XML.SubElement(p, 'patterns')
 
@@ -413,6 +624,12 @@ def workspace_cleanup(parser, xml_parent, data):
 
     deldirs = XML.SubElement(p, 'deleteDirs')
     deldirs.text = str(data.get("dirmatch", False)).lower()
+
+    XML.SubElement(p, 'cleanupParameter').text = str(
+        data.get('check-parameter', ''))
+
+    XML.SubElement(p, 'externalDelete').text = str(
+        data.get('external-deletion-command', ''))
 
 
 def m2_repository_cleanup(parser, xml_parent, data):
@@ -497,10 +714,10 @@ def rbenv(parser, xml_parent, data):
         (default: 'bundler,rake')
     :arg str rbenv-root: RBENV_ROOT  (default: $HOME/.rbenv)
     :arg str rbenv-repo: Which repo to clone rbenv from
-        (default: https://github.com/sstephenson/rbenv.git)
+        (default: https://github.com/rbenv/rbenv)
     :arg str rbenv-branch: Which branch to clone rbenv from  (default: master)
     :arg str ruby-build-repo: Which repo to clone ruby-build from
-        (default: https://github.com/sstephenson/ruby-build.git)
+        (default: https://github.com/rbenv/ruby-build)
     :arg str ruby-build-branch: Which branch to clone ruby-build from
         (default: master)
 
@@ -514,10 +731,10 @@ def rbenv(parser, xml_parent, data):
         ("preinstall-gem-list", 'gem__list', 'bundler,rake'),
         ("rbenv-root", 'rbenv__root', '$HOME/.rbenv'),
         ("rbenv-repo", 'rbenv__repository',
-            'https://github.com/sstephenson/rbenv.git'),
+            'https://github.com/rbenv/rbenv'),
         ("rbenv-branch", 'rbenv__revision', 'master'),
         ("ruby-build-repo", 'ruby__build__repository',
-            'https://github.com/sstephenson/ruby-build.git'),
+            'https://github.com/rbenv/ruby-build'),
         ("ruby-build-branch", 'ruby__build__revision', 'master'),
         ("ruby-version", 'version', '1.9.3-p484'),
     ]
@@ -651,23 +868,25 @@ def copy_to_slave(parser, xml_parent, data):
     Requires the Jenkins :jenkins-wiki:`Copy To Slave Plugin
     <Copy+To+Slave+Plugin>`.
 
-    :arg list includes: list of file patterns to copy
-    :arg list excludes: list of file patterns to exclude
-    :arg bool flatten: flatten directory structure
-    :arg str relative-to: base location of includes/excludes,
-                          must be userContent ($JENKINS_HOME/userContent)
-                          home ($JENKINS_HOME) or workspace
+    :arg list includes: list of file patterns to copy (optional)
+    :arg list excludes: list of file patterns to exclude (optional)
+    :arg bool flatten: flatten directory structure (Default: False)
+    :arg str relative-to: base location of includes/excludes, must be home
+        ($JENKINS_HOME), somewhereElse ($JENKINS_HOME/copyToSlave),
+        userContent ($JENKINS_HOME/userContent) or workspace
+        (Default: userContent)
     :arg bool include-ant-excludes: exclude ant's default excludes
+        (Default: False)
 
-    Example::
+    Minimal Example:
 
-      wrappers:
-        - copy-to-slave:
-            includes:
-              - file1
-              - file2*.txt
-            excludes:
-              - file2bad.txt
+    .. literalinclude::  /../../tests/wrappers/fixtures/copy-to-slave001.yaml
+       :language: yaml
+
+    Full Example:
+
+    .. literalinclude::  /../../tests/wrappers/fixtures/copy-to-slave002.yaml
+       :language: yaml
     """
     p = 'com.michelin.cio.hudson.plugins.copytoslave.CopyToSlaveBuildWrapper'
     cs = XML.SubElement(xml_parent, p)
@@ -680,7 +899,7 @@ def copy_to_slave(parser, xml_parent, data):
         str(data.get('include-ant-excludes', False)).lower()
 
     rel = str(data.get('relative-to', 'userContent'))
-    opt = ('userContent', 'home', 'workspace')
+    opt = ('home', 'somewhereElse', 'userContent', 'workspace')
     if rel not in opt:
         raise ValueError('relative-to must be one of %r' % opt)
     XML.SubElement(cs, 'relativeTo').text = rel
@@ -803,6 +1022,12 @@ def env_script(parser, xml_parent, data):
     <Environment+Script+Plugin>`.
 
     :arg script-content: The script to run (default: '')
+    :arg str script-type: The script type.
+
+        :script-types supported:
+            * **unix-script** (default)
+            * **power-shell**
+            * **batch-script**
     :arg only-run-on-parent: Only applicable for Matrix Jobs. If true, run only
       on the matrix parent job (default: false)
 
@@ -813,6 +1038,18 @@ def env_script(parser, xml_parent, data):
     """
     el = XML.SubElement(xml_parent, 'com.lookout.jenkins.EnvironmentScript')
     XML.SubElement(el, 'script').text = data.get('script-content', '')
+
+    valid_script_types = {
+        'unix-script': 'unixScript',
+        'power-shell': 'powerShell',
+        'batch-script': 'batchScript',
+    }
+    script_type = data.get('script-type', 'unix-script')
+    if script_type not in valid_script_types:
+        raise InvalidAttributeError('script-type', script_type,
+                                    valid_script_types)
+    XML.SubElement(el, 'scriptType').text = valid_script_types[script_type]
+
     only_on_parent = str(data.get('only-run-on-parent', False)).lower()
     XML.SubElement(el, 'onlyRunOnParent').text = only_on_parent
 
@@ -869,6 +1106,67 @@ def jclouds(parser, xml_parent, data):
         XML.SubElement(xml_parent,
                        'jenkins.plugins.jclouds.compute.'
                        'JCloudsOneOffSlave')
+
+
+def openstack(parser, xml_parent, data):
+    """yaml: openstack
+    Provision slaves from OpenStack on demand.  Requires the Jenkins
+    :jenkins-wiki:`Openstack Cloud Plugin <Openstack+Cloud+Plugin>`.
+
+    :arg list instances: List of instances to be launched at the beginning of
+        the build.
+
+        :instances:
+            * **cloud-name** (`str`) -- The name of the cloud profile which
+              contains the specified cloud instance template (required).
+            * **template-name** (`str`) -- The name of the cloud instance
+              template to create an instance from(required).
+            * **manual-template** (`bool`) -- If True, instance template name
+              will be put in 'Specify Template Name as String' option. Not
+              specifying or specifying False, instance template name will be
+              put in 'Select Template from List' option. To use parameter
+              replacement, set this to True.  (default: False)
+            * **count** (`int`) -- How many instances to create (default: 1).
+
+    :arg bool single-use: Whether or not to terminate the slave after use
+        (default: False).
+
+    Example:
+
+    .. literalinclude:: /../../tests/wrappers/fixtures/openstack001.yaml
+    """
+    tag_prefix = 'jenkins.plugins.openstack.compute.'
+
+    if 'instances' in data:
+        clouds_build_wrapper = XML.SubElement(
+            xml_parent, tag_prefix + 'JCloudsBuildWrapper')
+        instances_wrapper = XML.SubElement(
+            clouds_build_wrapper, 'instancesToRun')
+
+        for instance in data['instances']:
+            instances_to_run = XML.SubElement(
+                instances_wrapper, tag_prefix + 'InstancesToRun')
+
+            try:
+                cloud_name = instance['cloud-name']
+                template_name = instance['template-name']
+            except KeyError as exception:
+                raise MissingAttributeError(exception.args[0])
+
+            XML.SubElement(instances_to_run, 'cloudName').text = cloud_name
+
+            if instance.get('manual-template', False):
+                XML.SubElement(instances_to_run,
+                               'manualTemplateName').text = template_name
+            else:
+                XML.SubElement(instances_to_run,
+                               'templateName').text = template_name
+
+            XML.SubElement(instances_to_run, 'count').text = str(
+                instance.get('count', 1))
+
+    if data.get('single-use', False):
+        XML.SubElement(xml_parent, tag_prefix + 'JCloudsOneOffSlave')
 
 
 def build_user_vars(parser, xml_parent, data):
@@ -1682,12 +1980,12 @@ def android_emulator(parser, xml_parent, data):
 
 
 def artifactory_maven(parser, xml_parent, data):
-    """ yaml: artifactory-maven
+    """yaml: artifactory-maven
     Wrapper for non-Maven projects. Requires the
     :jenkins-wiki:`Artifactory Plugin <Artifactory+Plugin>`
 
     :arg str url: URL of the Artifactory server. e.g.
-        http://www.jfrog.com/artifactory/ (default '')
+        https://www.jfrog.com/artifactory/ (default '')
     :arg str name: Artifactory user with permissions use for
         connected to the selected Artifactory Server
         (default '')
@@ -1727,17 +2025,22 @@ def artifactory_maven(parser, xml_parent, data):
 
 
 def artifactory_generic(parser, xml_parent, data):
-    """ yaml: artifactory-generic
+    """yaml: artifactory-generic
     Wrapper for non-Maven projects. Requires the
     :jenkins-wiki:`Artifactory Plugin <Artifactory+Plugin>`
 
     :arg str url: URL of the Artifactory server. e.g.
-        http://www.jfrog.com/artifactory/ (default: '')
+        https://www.jfrog.com/artifactory/ (default: '')
     :arg str name: Artifactory user with permissions use for
         connected to the selected Artifactory Server
         (default '')
-    :arg str repo-key: Release repository name (default '')
-    :arg str snapshot-repo-key: Snapshots repository name (default '')
+    :arg str repo-key: Release repository name (plugin < 2.3.0) (default '')
+    :arg str snapshot-repo-key: Snapshots repository name (plugin < 2.3.0)
+        (default '')
+    :arg str key-from-select: Repository key to use (plugin >= 2.3.0)
+        (default '')
+    :arg str key-from-text: Repository key to use that can be configured
+        dynamically using Jenkins variables (plugin >= 2.3.0) (default '')
     :arg list deploy-pattern: List of patterns for mappings
         build artifacts to published artifacts. Supports Ant-style wildcards
         mapping to target directories. E.g.: */*.zip=>dir (default [])
@@ -1779,9 +2082,23 @@ def artifactory_generic(parser, xml_parent, data):
     details = XML.SubElement(artifactory, 'details')
     artifactory_common_details(details, data)
 
-    XML.SubElement(details, 'repositoryKey').text = data.get('repo-key', '')
-    XML.SubElement(details, 'snapshotsRepositoryKey').text = data.get(
-        'snapshot-repo-key', '')
+    # Get plugin information to maintain backwards compatibility
+    info = parser.registry.get_plugin_info('artifactory')
+    version = pkg_resources.parse_version(info.get('version', '0'))
+
+    if version >= pkg_resources.parse_version('2.3.0'):
+        deployReleaseRepo = XML.SubElement(details, 'deployReleaseRepository')
+        XML.SubElement(deployReleaseRepo, 'keyFromText').text = data.get(
+            'key-from-text', '')
+        XML.SubElement(deployReleaseRepo, 'keyFromSelect').text = data.get(
+            'key-from-select', '')
+        XML.SubElement(deployReleaseRepo, 'dynamicMode').text = str(
+            'key-from-text' in data.keys()).lower()
+    else:
+        XML.SubElement(details, 'repositoryKey').text = data.get(
+            'repo-key', '')
+        XML.SubElement(details, 'snapshotsRepositoryKey').text = data.get(
+            'snapshot-repo-key', '')
 
     XML.SubElement(artifactory, 'deployPattern').text = ','.join(data.get(
         'deploy-pattern', []))
@@ -1804,12 +2121,12 @@ def artifactory_generic(parser, xml_parent, data):
 
 
 def artifactory_maven_freestyle(parser, xml_parent, data):
-    """ yaml: artifactory-maven-freestyle
+    """yaml: artifactory-maven-freestyle
     Wrapper for Free Stype projects. Requires the Artifactory plugin.
     Requires :jenkins-wiki:`Artifactory Plugin <Artifactory+Plugin>`
 
     :arg str url: URL of the Artifactory server. e.g.
-        http://www.jfrog.com/artifactory/ (default: '')
+        https://www.jfrog.com/artifactory/ (default: '')
     :arg str name: Artifactory user with permissions use for
         connected to the selected Artifactory Server (default '')
     :arg str release-repo-key: Release repository name (default '')

@@ -17,8 +17,8 @@
 import os
 import six
 
-from jenkins_jobs import cmd
 from jenkins_jobs import builder
+from jenkins_jobs import cmd
 from tests.base import mock
 from tests.cmd.test_cmd import CmdTestsBase
 
@@ -26,19 +26,19 @@ from tests.cmd.test_cmd import CmdTestsBase
 @mock.patch('jenkins_jobs.builder.Jenkins.get_plugins_info', mock.MagicMock)
 class UpdateTests(CmdTestsBase):
 
-    @mock.patch('jenkins_jobs.cmd.Builder.update_job')
-    def test_update_jobs(self, update_job_mock):
+    @mock.patch('jenkins_jobs.cmd.Builder.update_jobs')
+    def test_update_jobs(self, update_jobs_mock):
         """
         Test update_job is called
         """
         # don't care about the value returned here
-        update_job_mock.return_value = ([], 0)
+        update_jobs_mock.return_value = ([], 0)
 
         path = os.path.join(self.fixtures_path, 'cmd-002.yaml')
         args = self.parser.parse_args(['update', path])
 
         cmd.execute(args, self.config)
-        update_job_mock.assert_called_with([path], [])
+        update_jobs_mock.assert_called_with([path], [], n_workers=mock.ANY)
 
     @mock.patch('jenkins_jobs.builder.Jenkins.is_job', return_value=True)
     @mock.patch('jenkins_jobs.builder.Jenkins.get_jobs')
@@ -88,7 +88,7 @@ class UpdateTests(CmdTestsBase):
         # mocks to call real methods on a the above test object.
         b_inst = builder_mock.return_value
         b_inst.plugins_list = builder_obj.plugins_list
-        b_inst.update_job.side_effect = builder_obj.update_job
+        b_inst.update_jobs.side_effect = builder_obj.update_jobs
         b_inst.delete_old_managed.side_effect = builder_obj.delete_old_managed
 
         def _get_jobs():
@@ -107,18 +107,18 @@ class UpdateTests(CmdTestsBase):
             with mock.patch('jenkins_jobs.builder.Jenkins.is_managed',
                             return_value=True):
                 cmd.execute(args, self.config)
-            self.assertEquals(2, update.call_count,
-                              "Expected Jenkins.update_job to be called '%d' "
-                              "times, got '%d' calls instead.\n"
-                              "Called with: %s" % (2, update.call_count,
-                                                   update.mock_calls))
+            self.assertEqual(2, update.call_count,
+                             "Expected Jenkins.update_job to be called '%d' "
+                             "times, got '%d' calls instead.\n"
+                             "Called with: %s" % (2, update.call_count,
+                                                  update.mock_calls))
 
         calls = [mock.call(name) for name in jobs]
-        self.assertEquals(2, delete_job_mock.call_count,
-                          "Expected Jenkins.delete_job to be called '%d' "
-                          "times got '%d' calls instead.\n"
-                          "Called with: %s" % (2, delete_job_mock.call_count,
-                                               delete_job_mock.mock_calls))
+        self.assertEqual(2, delete_job_mock.call_count,
+                         "Expected Jenkins.delete_job to be called '%d' "
+                         "times got '%d' calls instead.\n"
+                         "Called with: %s" % (2, delete_job_mock.call_count,
+                                              delete_job_mock.mock_calls))
         delete_job_mock.assert_has_calls(calls, any_order=True)
 
     @mock.patch('jenkins_jobs.builder.jenkins.Jenkins')
@@ -137,7 +137,7 @@ class UpdateTests(CmdTestsBase):
             cmd.execute(args, self.config)
         # unless the timeout is set, should only call with 3 arguments
         # (url, user, password)
-        self.assertEquals(len(jenkins_mock.call_args[0]), 3)
+        self.assertEqual(len(jenkins_mock.call_args[0]), 3)
 
     @mock.patch('jenkins_jobs.builder.jenkins.Jenkins')
     def test_update_timeout_set(self, jenkins_mock):
@@ -156,4 +156,4 @@ class UpdateTests(CmdTestsBase):
             cmd.execute(args, self.config)
         # when timeout is set, the fourth argument to the Jenkins api init
         # should be the value specified from the config
-        self.assertEquals(jenkins_mock.call_args[0][3], 0.2)
+        self.assertEqual(jenkins_mock.call_args[0][3], 0.2)

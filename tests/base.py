@@ -17,36 +17,38 @@
 # License for the specific language governing permissions and limitations
 # under the License.
 
+import doctest
 import io
+import json
+import logging
+import operator
 import os
 import re
-import doctest
-import logging
-import fixtures
-import json
-import operator
-import testtools
-from testtools.content import text_content
 import xml.etree.ElementTree as XML
+
+import fixtures
 from six.moves import configparser
 from six.moves import StringIO
+import testtools
+from testtools.content import text_content
 from yaml import safe_dump
+
+from jenkins_jobs.cmd import DEFAULT_CONF
+import jenkins_jobs.local_yaml as yaml
+from jenkins_jobs.modules import project_externaljob
+from jenkins_jobs.modules import project_flow
+from jenkins_jobs.modules import project_matrix
+from jenkins_jobs.modules import project_maven
+from jenkins_jobs.modules import project_multijob
+from jenkins_jobs.parser import YamlParser
+from jenkins_jobs.xml_config import XmlJob
+
 # This dance deals with the fact that we want unittest.mock if
 # we're on Python 3.4 and later, and non-stdlib mock otherwise.
 try:
     from unittest import mock
 except ImportError:
     import mock  # noqa
-
-from jenkins_jobs.cmd import DEFAULT_CONF
-import jenkins_jobs.local_yaml as yaml
-from jenkins_jobs.parser import YamlParser
-from jenkins_jobs.xml_config import XmlJob
-from jenkins_jobs.modules import (project_flow,
-                                  project_matrix,
-                                  project_maven,
-                                  project_multijob,
-                                  project_externaljob)
 
 
 def get_scenarios(fixtures_path, in_ext='yaml', out_ext='xml',
@@ -144,23 +146,6 @@ class BaseTestCase(LoggingFixture):
 
         expected_xml = self._read_utf8_content()
         yaml_content = self._read_yaml_content(self.in_filename)
-        project = None
-        if ('project-type' in yaml_content):
-            if (yaml_content['project-type'] == "maven"):
-                project = project_maven.Maven(None)
-            elif (yaml_content['project-type'] == "matrix"):
-                project = project_matrix.Matrix(None)
-            elif (yaml_content['project-type'] == "flow"):
-                project = project_flow.Flow(None)
-            elif (yaml_content['project-type'] == "multijob"):
-                project = project_multijob.MultiJob(None)
-            elif (yaml_content['project-type'] == "externaljob"):
-                project = project_externaljob.ExternalJob(None)
-
-        if project:
-            xml_project = project.root_xml(yaml_content)
-        else:
-            xml_project = XML.Element('project')
 
         plugins_info = None
         if self.plugins_info_filename is not None:
@@ -173,6 +158,24 @@ class BaseTestCase(LoggingFixture):
         parser = YamlParser(config, plugins_info)
 
         pub = self.klass(parser.registry)
+
+        project = None
+        if ('project-type' in yaml_content):
+            if (yaml_content['project-type'] == "maven"):
+                project = project_maven.Maven(parser.registry)
+            elif (yaml_content['project-type'] == "matrix"):
+                project = project_matrix.Matrix(parser.registry)
+            elif (yaml_content['project-type'] == "flow"):
+                project = project_flow.Flow(parser.registry)
+            elif (yaml_content['project-type'] == "multijob"):
+                project = project_multijob.MultiJob(parser.registry)
+            elif (yaml_content['project-type'] == "externaljob"):
+                project = project_externaljob.ExternalJob(parser.registry)
+
+        if project:
+            xml_project = project.root_xml(yaml_content)
+        else:
+            xml_project = XML.Element('project')
 
         # Generate the XML tree directly with modules/general
         pub.gen_xml(parser, xml_project, yaml_content)

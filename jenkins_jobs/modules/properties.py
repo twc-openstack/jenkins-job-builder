@@ -31,11 +31,14 @@ Example::
           url: https://github.com/openstack-infra/jenkins-job-builder/
 """
 
-
-import xml.etree.ElementTree as XML
-import jenkins_jobs.modules.base
-from jenkins_jobs.errors import InvalidAttributeError, JenkinsJobsException
 import logging
+import pkg_resources
+import xml.etree.ElementTree as XML
+
+from jenkins_jobs.errors import InvalidAttributeError
+from jenkins_jobs.errors import JenkinsJobsException
+from jenkins_jobs.errors import MissingAttributeError
+import jenkins_jobs.modules.base
 
 
 def builds_chain_fingerprinter(parser, xml_parent, data):
@@ -45,13 +48,14 @@ def builds_chain_fingerprinter(parser, xml_parent, data):
     <Builds+chain+fingerprinter>`.
 
     :arg bool per-builds-chain: enable builds hierarchy fingerprinting
-        (default False)
+        (default false)
     :arg bool per-job-chain: enable jobs hierarchy fingerprinting
-        (default False)
+        (default false)
 
     Example:
 
     .. literalinclude:: /../../tests/properties/fixtures/fingerprinter.yaml
+       :language: yaml
     """
     fingerprinter = XML.SubElement(xml_parent,
                                    'org.jenkinsci.plugins.'
@@ -75,11 +79,11 @@ def ownership(parser, xml_parent, data):
     Example:
 
     .. literalinclude:: /../../tests/properties/fixtures/ownership.yaml
+       :language: yaml
     """
-    ownership_plugin = \
-        XML.SubElement(xml_parent,
-                       'com.synopsys.arc.'
-                       'jenkins.plugins.ownership.jobs.JobOwnerJobProperty')
+    ownership_plugin = XML.SubElement(
+        xml_parent,
+        'com.synopsys.arc.jenkins.plugins.ownership.jobs.JobOwnerJobProperty')
     ownership = XML.SubElement(ownership_plugin, 'ownership')
     owner = str(data.get('enabled', True)).lower()
     XML.SubElement(ownership, 'ownershipEnabled').text = owner
@@ -100,15 +104,12 @@ def promoted_build(parser, xml_parent, data):
     Requires the Jenkins :jenkins-wiki:`Promoted Builds Plugin
     <Promoted+Builds+Plugin>`.
 
-    :arg list names: the promoted build names
+    :arg list names: the promoted build names (optional)
 
-    Example::
+    Example:
 
-      properties:
-        - promoted-build:
-            names:
-              - "Release to QA"
-              - "Jane Must Approve"
+    .. literalinclude:: /../../tests/properties/fixtures/promoted_build.yaml
+       :language: yaml
     """
     promoted = XML.SubElement(xml_parent, 'hudson.plugins.promoted__builds.'
                                           'JobPropertyImpl')
@@ -123,19 +124,20 @@ def github(parser, xml_parent, data):
     """yaml: github
     Sets the GitHub URL for the project.
 
-    :arg str url: the GitHub URL
+    :arg str url: the GitHub URL (required)
 
-    Example::
+    Example:
 
-      properties:
-        - github:
-            url: https://github.com/openstack-infra/jenkins-job-builder/
+    .. literalinclude:: /../../tests/properties/fixtures/github.yaml
+       :language: yaml
     """
     github = XML.SubElement(xml_parent,
                             'com.coravy.hudson.plugins.github.'
                             'GithubProjectProperty')
-    github_url = XML.SubElement(github, 'projectUrl')
-    github_url.text = data['url']
+    try:
+        XML.SubElement(github, 'projectUrl').text = data['url']
+    except KeyError as e:
+        raise MissingAttributeError(e)
 
 
 def least_load(parser, xml_parent, data):
@@ -143,11 +145,12 @@ def least_load(parser, xml_parent, data):
     Enables the Least Load Plugin.
     Requires the Jenkins :jenkins-wiki:`Least Load Plugin <Least+Load+Plugin>`.
 
-    :arg bool disabled: whether or not leastload is disabled (default True)
+    :arg bool disabled: whether or not leastload is disabled (default true)
 
     Example:
 
     .. literalinclude:: /../../tests/properties/fixtures/least-load002.yaml
+       :language: yaml
     """
     least = XML.SubElement(xml_parent,
                            'org.bstick12.jenkinsci.plugins.leastload.'
@@ -165,19 +168,16 @@ def throttle(parser, xml_parent, data):
 
     :arg int max-per-node: max concurrent builds per node (default 0)
     :arg int max-total: max concurrent builds (default 0)
-    :arg bool enabled: whether throttling is enabled (default True)
+    :arg bool enabled: whether throttling is enabled (default true)
     :arg str option: throttle `project` or `category`
     :arg list categories: multiproject throttle categories
+    :arg bool matrix-builds: throttle matrix master builds (default true)
+    :arg bool matrix-configs: throttle matrix config builds (default false)
 
-    Example::
+    Example:
 
-      properties:
-        - throttle:
-            max-total: 4
-            categories:
-              - cat1
-              - cat2
-
+    .. literalinclude:: /../../tests/properties/fixtures/throttle001.yaml
+       :language: yaml
     """
     throttle = XML.SubElement(xml_parent,
                               'hudson.plugins.throttleconcurrents.'
@@ -188,18 +188,27 @@ def throttle(parser, xml_parent, data):
         data.get('max-total', '0'))
     # TODO: What's "categories"?
     # XML.SubElement(throttle, 'categories')
-    if data.get('enabled', True):
-        XML.SubElement(throttle, 'throttleEnabled').text = 'true'
-    else:
-        XML.SubElement(throttle, 'throttleEnabled').text = 'false'
+    XML.SubElement(throttle, 'throttleEnabled').text = str(
+        data.get('enabled', True)).lower()
     cat = data.get('categories', [])
     if cat:
         cn = XML.SubElement(throttle, 'categories')
         for c in cat:
             XML.SubElement(cn, 'string').text = str(c)
 
-    XML.SubElement(throttle, 'throttleOption').text = data.get('option')
+    options_list = ('category', 'project')
+    option = data.get('option')
+    if option not in options_list:
+        raise InvalidAttributeError('option', option, options_list)
+
+    XML.SubElement(throttle, 'throttleOption').text = option
     XML.SubElement(throttle, 'configVersion').text = '1'
+
+    matrixopt = XML.SubElement(throttle, 'matrixOptions')
+    XML.SubElement(matrixopt, 'throttleMatrixBuilds').text = str(
+        data.get('matrix-builds', True)).lower()
+    XML.SubElement(matrixopt, 'throttleMatrixConfigurations').text = str(
+        data.get('matrix-configs', False)).lower()
 
 
 def sidebar(parser, xml_parent, data):
@@ -215,6 +224,7 @@ def sidebar(parser, xml_parent, data):
     Example:
 
     .. literalinclude:: /../../tests/properties/fixtures/sidebar02.yaml
+       :language: yaml
     """
     sidebar = xml_parent.find('hudson.plugins.sidebar__link.ProjectLinks')
     if sidebar is None:
@@ -284,72 +294,82 @@ def authenticated_build(parser, xml_parent, data):
     Specifies an authorization matrix where only authenticated users
     may trigger a build.
 
-    DEPRECATED
+    .. deprecated:: 0.1.0. Please use :ref:`authorization <authorization>`.
 
-    Example::
+    Example:
 
-      properties:
-        - authenticated-build
+    .. literalinclude::
+        /../../tests/properties/fixtures/authenticated_build.yaml
+       :language: yaml
+
     """
     # TODO: generalize this
-    if data:
-        security = XML.SubElement(xml_parent,
-                                  'hudson.security.'
-                                  'AuthorizationMatrixProperty')
-        XML.SubElement(security, 'permission').text = \
-            'hudson.model.Item.Build:authenticated'
+    security = XML.SubElement(xml_parent,
+                              'hudson.security.'
+                              'AuthorizationMatrixProperty')
+    XML.SubElement(security, 'permission').text = (
+        'hudson.model.Item.Build:authenticated')
 
 
 def authorization(parser, xml_parent, data):
     """yaml: authorization
     Specifies an authorization matrix
 
-    The available rights are:
-      job-delete
-      job-configure
-      job-read
-      job-extended-read
-      job-discover
-      job-build
-      job-workspace
-      job-cancel
-      run-delete
-      run-update
-      scm-tag
+    .. _authorization:
 
-    Example::
+    :arg list <name>: `<name>` is the name of the group or user, containing
+        the list of rights to grant.
 
-      properties:
-        - authorization:
-            admin:
-              - job-delete
-              - job-configure
-              - job-read
-              - job-discover
-              - job-build
-              - job-workspace
-              - job-cancel
-              - run-delete
-              - run-update
-              - scm-tag
-            anonymous:
-              - job-discover
-              - job-read
-              - job-extended-read
+       :<name> rights:
+            * **credentials-create**
+            * **credentials-delete**
+            * **credentials-manage-domains**
+            * **credentials-update**
+            * **credentials-view**
+            * **job-build**
+            * **job-cancel**
+            * **job-configure**
+            * **job-delete**
+            * **job-discover**
+            * **job-extended-read**
+            * **job-move**
+            * **job-read**
+            * **job-status**
+            * **job-workspace**
+            * **ownership-jobs**
+            * **run-delete**
+            * **run-update**
+            * **scm-tag**
+
+    Example:
+
+    .. literalinclude:: /../../tests/properties/fixtures/authorization.yaml
+       :language: yaml
     """
 
+    credentials = 'com.cloudbees.plugins.credentials.CredentialsProvider.'
+    ownership = 'com.synopsys.arc.jenkins.plugins.ownership.OwnershipPlugin.'
+
     mapping = {
-        'job-delete': 'hudson.model.Item.Delete',
-        'job-configure': 'hudson.model.Item.Configure',
-        'job-read': 'hudson.model.Item.Read',
-        'job-extended-read': 'hudson.model.Item.ExtendedRead',
-        'job-discover': 'hudson.model.Item.Discover',
+        'credentials-create': ''.join((credentials, 'Create')),
+        'credentials-delete': ''.join((credentials, 'Delete')),
+        'credentials-manage-domains': ''.join((credentials, 'ManageDomains')),
+        'credentials-update': ''.join((credentials, 'Update')),
+        'credentials-view': ''.join((credentials, 'View')),
         'job-build': 'hudson.model.Item.Build',
-        'job-workspace': 'hudson.model.Item.Workspace',
         'job-cancel': 'hudson.model.Item.Cancel',
+        'job-configure': 'hudson.model.Item.Configure',
+        'job-delete': 'hudson.model.Item.Delete',
+        'job-discover': 'hudson.model.Item.Discover',
+        'job-extended-read': 'hudson.model.Item.ExtendedRead',
+        'job-move': 'hudson.model.Item.Move',
+        'job-read': 'hudson.model.Item.Read',
+        'job-status': 'hudson.model.Item.ViewStatus',
+        'job-workspace': 'hudson.model.Item.Workspace',
+        'ownership-jobs': ''.join((ownership, 'Jobs')),
         'run-delete': 'hudson.model.Run.Delete',
         'run-update': 'hudson.model.Run.Update',
-        'scm-tag': 'hudson.scm.SCM.Tag'
+        'scm-tag': 'hudson.scm.SCM.Tag',
     }
 
     if data:
@@ -358,7 +378,10 @@ def authorization(parser, xml_parent, data):
         for (username, perms) in data.items():
             for perm in perms:
                 pe = XML.SubElement(matrix, 'permission')
-                pe.text = "{0}:{1}".format(mapping[perm], username)
+                try:
+                    pe.text = "{0}:{1}".format(mapping[perm], username)
+                except KeyError:
+                    raise InvalidAttributeError(username, perm, mapping.keys())
 
 
 def extended_choice(parser, xml_parent, data):
@@ -388,17 +411,19 @@ def priority_sorter(parser, xml_parent, data):
     :arg int priority: Priority of the job.  Higher value means higher
         priority, with 100 as the standard priority. (required)
 
-    Example::
+    Example:
 
-        properties:
-          - priority-sorter:
-              priority: 150
+    .. literalinclude:: /../../tests/properties/fixtures/priority_sorter.yaml
+       :language: yaml
     """
     priority_sorter_tag = XML.SubElement(xml_parent,
                                          'hudson.queueSorter.'
                                          'PrioritySorterJobProperty')
-    XML.SubElement(priority_sorter_tag, 'priority').text = str(
-        data['priority'])
+    try:
+        XML.SubElement(priority_sorter_tag, 'priority').text = str(
+            data['priority'])
+    except KeyError as e:
+        raise MissingAttributeError(e)
 
 
 def build_blocker(parser, xml_parent, data):
@@ -410,22 +435,19 @@ def build_blocker(parser, xml_parent, data):
     Requires the Jenkins :jenkins-wiki:`Build Blocker Plugin
     <Build+Blocker+Plugin>`.
 
-    :arg bool use-build-blocker: Enable or disable build blocker
-        (default true)
-    :arg list blocking-jobs: One regular expression per line
-        to select blocking jobs by their names. (required)
-
+    :arg bool use-build-blocker: Enable or disable build blocker (default true)
+    :arg list blocking-jobs: One regular expression per line to select
+        blocking jobs by their names. (required)
     :arg str block-level: block build globally ('GLOBAL') or per node ('NODE')
         (default 'GLOBAL')
-
     :arg str queue-scanning: scan build queue for all builds ('ALL') or only
         buildable builds ('BUILDABLE') (default 'DISABLED'))
 
-
     Example:
 
-    .. literalinclude:: \
-            /../../tests/properties/fixtures/build-blocker01.yaml
+    .. literalinclude::
+        /../../tests/properties/fixtures/build-blocker01.yaml
+       :language: yaml
     """
     blocker = XML.SubElement(xml_parent,
                              'hudson.plugins.'
@@ -466,14 +488,14 @@ def copyartifact(parser, xml_parent, data):
     Requires the Jenkins :jenkins-wiki:`Copy Artifact plugin
     <Copy+Artifact+Plugin>`.
 
-    :arg string projects: comma separated list of projects that can copy
+    :arg str projects: comma separated list of projects that can copy
         artifacts of this project. Wild card character '*' is available.
-
 
     Example:
 
-    .. literalinclude:: \
-            /../../tests/properties/fixtures/copyartifact.yaml
+    .. literalinclude::
+        /../../tests/properties/fixtures/copyartifact.yaml
+       :language: yaml
 
     """
     copyartifact = XML.SubElement(xml_parent,
@@ -503,12 +525,14 @@ def batch_tasks(parser, xml_parent, data):
 
     :arg list batch-tasks: Batch tasks.
 
-        :Task: * **name** (`str`) Task name.
-               * **script** (`str`) Task script.
+        :Tasks:
+            * **name** (`str`) Task name.
+            * **script** (`str`) Task script.
 
     Example:
 
     .. literalinclude:: /../../tests/properties/fixtures/batch-task.yaml
+       :language: yaml
 
     """
     pdef = XML.SubElement(xml_parent,
@@ -531,10 +555,10 @@ def heavy_job(parser, xml_parent, data):
     :arg int weight: Specify the total number of executors
         that this job should occupy (default 1)
 
-
     Example:
 
     .. literalinclude:: /../../tests/properties/fixtures/heavy-job.yaml
+       :language: yaml
 
     """
     heavyjob = XML.SubElement(xml_parent,
@@ -553,15 +577,16 @@ def slave_utilization(parser, xml_parent, data):
     <Slave+Utilization+Plugin>`.
 
     :arg int slave-percentage: Specify the percentage of a slave's execution
-        slots that this job should occupy (default: 0)
+        slots that this job should occupy (default 0)
     :arg bool single-instance-per-slave: Control whether concurrent instances
         of this job will be permitted to run in parallel on a single slave
-        (default: False)
+        (default false)
 
     Example:
 
-    .. literalinclude:: \
-            /../../tests/properties/fixtures/slave-utilization1.yaml
+    .. literalinclude::
+        /../../tests/properties/fixtures/slave-utilization1.yaml
+       :language: yaml
     """
     utilization = XML.SubElement(
         xml_parent, 'com.suryagaddipati.jenkins.SlaveUtilizationProperty')
@@ -579,15 +604,16 @@ def delivery_pipeline(parser, xml_parent, data):
     Requires the Jenkins :jenkins-wiki:`Delivery Pipeline Plugin
     <Delivery+Pipeline+Plugin>`.
 
+    :arg str stage: Name of the stage for this job (default '')
+    :arg str task: Name of the task for this job (default '')
     :arg str description: task description template for this job
-        (default: '')
-    :arg str stage: Name of the stage for this job (default: '')
-    :arg str task: Name of the task for this job (default: '')
+        (default '')
 
     Example:
 
-    .. literalinclude:: \
-            /../../tests/properties/fixtures/delivery-pipeline1.yaml
+    .. literalinclude::
+        /../../tests/properties/fixtures/delivery-pipeline1.yaml
+       :language: yaml
 
     """
     pipeline = XML.SubElement(xml_parent,
@@ -609,8 +635,9 @@ def zeromq_event(parser, xml_parent, data):
 
     Example:
 
-    .. literalinclude:: \
-            /../../tests/properties/fixtures/zeromq-event.yaml
+    .. literalinclude::
+        /../../tests/properties/fixtures/zeromq-event.yaml
+       :language: yaml
 
     """
 
@@ -620,20 +647,104 @@ def zeromq_event(parser, xml_parent, data):
     XML.SubElement(zmq_event, 'enabled').text = 'true'
 
 
+def slack(parser, xml_parent, data):
+    """yaml: slack
+    Requires the Jenkins :jenkins-wiki:`Slack Plugin <Slack+Plugin>`
+
+    When using Slack Plugin version < 2.0, Slack Plugin itself requires a
+    publisher aswell as properties please note that you have to add the
+    publisher to your job configuration aswell. When using Slack Plugin
+    version >= 2.0, you should only configure the publisher.
+
+    :arg bool notify-start: Send notification when the job starts
+        (default: False)
+    :arg bool notify-success: Send notification on success. (default: False)
+    :arg bool notify-aborted: Send notification when job is aborted. (
+        default: False)
+    :arg bool notify-not-built: Send notification when job set to NOT_BUILT
+        status. (default: False)
+    :arg bool notify-unstable: Send notification when job becomes unstable.
+        (default: False)
+    :arg bool notify-failure: Send notification when job fails.
+        (default: False)
+    :arg bool notifiy-back-to-normal: Send notification when job is
+        succeeding again after being unstable or failed. (default: False)
+    :arg bool 'notify-repeated-failure': Send notification when job is
+        still failing after last failure. (default: False)
+    :arg bool include-test-summary: Include the test summary. (default:
+        False)
+    :arg bool include-custom-message: Include a custom message into the
+        notification. (default: False)
+    :arg str custom-message: Custom message to be included. (default: '')
+    :arg str room: A comma seperated list of rooms / channels to send
+        the notifications to. (default: '')
+
+    Example:
+
+    .. literalinclude::
+        /../../tests/properties/fixtures/slack001.yaml
+        :language: yaml
+    """
+    def _add_xml(elem, name, value):
+        if isinstance(value, bool):
+            value = str(value).lower()
+        XML.SubElement(elem, name).text = value
+
+    logger = logging.getLogger(__name__)
+
+    plugin_info = parser.registry.get_plugin_info('Slack Notification Plugin')
+    plugin_ver = pkg_resources.parse_version(plugin_info.get('version', "0"))
+
+    if plugin_ver >= pkg_resources.parse_version("2.0"):
+        logger.warn(
+            "properties section is not used with plugin version >= 2.0",
+        )
+
+    mapping = (
+        ('notify-start', 'startNotification', False),
+        ('notify-success', 'notifySuccess', False),
+        ('notify-aborted', 'notifyAborted', False),
+        ('notify-not-built', 'notifyNotBuilt', False),
+        ('notify-unstable', 'notifyUnstable', False),
+        ('notify-failure', 'notifyFailure', False),
+        ('notify-back-to-normal', 'notifyBackToNormal', False),
+        ('notify-repeated-failure', 'notifyRepeatedFailure', False),
+        ('include-test-summary', 'includeTestSummary', False),
+        ('include-custom-message', 'includeCustomMessage', False),
+        ('custom-message', 'customMessage', ''),
+        ('room', 'room', ''),
+    )
+
+    slack = XML.SubElement(
+        xml_parent,
+        'jenkins.plugins.slack.SlackNotifier_-SlackJobProperty',
+    )
+
+    # Ensure that custom-message is set when include-custom-message is set
+    # to true.
+    if data.get('include-custom-message', False):
+        if not data.get('custom-message', ''):
+            raise MissingAttributeError('custom-message')
+
+    for yaml_name, xml_name, default_value in mapping:
+        _add_xml(slack, xml_name, data.get(yaml_name, default_value))
+
+
 def rebuild(parser, xml_parent, data):
     """yaml: rebuild
     Requires the Jenkins :jenkins-wiki:`Rebuild Plugin
     <Rebuild+Plugin>`.
 
     :arg bool auto-rebuild: Rebuild without asking for parameters
-        (default: False)
+        (default false)
     :arg bool rebuild-disabled: Disable rebuilding for this job
-        (default: False)
+        (default false)
 
     Example:
 
-    .. literalinclude:: \
-            /../../tests/properties/fixtures/rebuild.yaml
+    .. literalinclude::
+        /../../tests/properties/fixtures/rebuild.yaml
+       :language: yaml
     """
     sub_element = XML.SubElement(xml_parent,
                                  'com.sonyericsson.rebuild.RebuildSettings')
@@ -642,6 +753,40 @@ def rebuild(parser, xml_parent, data):
         data.get('auto-rebuild', False)).lower()
     XML.SubElement(sub_element, 'rebuildDisabled').text = str(
         data.get('rebuild-disabled', False)).lower()
+
+
+def build_discarder(parser, xml_parent, data):
+    """yaml: build-discarder
+
+    :arg int days-to-keep: Number of days to keep builds for (default -1)
+    :arg int num-to-keep: Number of builds to keep (default -1)
+    :arg int artifact-days-to-keep: Number of days to keep builds with
+        artifacts (default -1)
+    :arg int artifact-num-to-keep: Number of builds with artifacts to keep
+        (default -1)
+
+    Example:
+
+    .. literalinclude::
+        /../../tests/properties/fixtures/build-discarder-001.yaml
+       :language: yaml
+
+    .. literalinclude::
+        /../../tests/properties/fixtures/build-discarder-002.yaml
+       :language: yaml
+    """
+    base_sub = XML.SubElement(xml_parent,
+                              'jenkins.model.BuildDiscarderProperty')
+    strategy = XML.SubElement(base_sub, 'strategy')
+    strategy.set('class', 'hudson.tasks.LogRotator')
+    days = XML.SubElement(strategy, 'daysToKeep')
+    days.text = str(data.get('days-to-keep', -1))
+    num = XML.SubElement(strategy, 'numToKeep')
+    num.text = str(data.get('num-to-keep', -1))
+    adays = XML.SubElement(strategy, 'artifactDaysToKeep')
+    adays.text = str(data.get('artifact-days-to-keep', -1))
+    anum = XML.SubElement(strategy, 'artifactNumToKeep')
+    anum.text = str(data.get('artifact-num-to-keep', -1))
 
 
 class Properties(jenkins_jobs.modules.base.Base):

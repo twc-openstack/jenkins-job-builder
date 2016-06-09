@@ -19,8 +19,14 @@
         <repoUrl>https://internal.net/projects/repo</repoUrl>
         <mirrorDir>~/git/project/</mirrorDir>
         <jobs>3</jobs>
+        <depth>2</depth>
         <currentBranch>false</currentBranch>
+        <resetFirst>false</resetFirst>
         <quiet>false</quiet>
+        <forceSync>false</forceSync>
+        <noTags>false</noTags>
+        <trace>false</trace>
+        <showAllChanges>false</showAllChanges>
       </scm>
       <scm class="hudson.plugins.git.GitSCM">
         <configVersion>2</configVersion>

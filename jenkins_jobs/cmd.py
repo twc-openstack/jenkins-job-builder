@@ -14,18 +14,22 @@
 # under the License.
 
 import argparse
-import io
-from six.moves import configparser, StringIO, input
 import fnmatch
+import io
 import logging
 import os
 import platform
 import sys
 import yaml
-import jenkins_jobs.version
+
+from six.moves import configparser
+from six.moves import input
+from six.moves import StringIO
 
 from jenkins_jobs.builder import Builder
 from jenkins_jobs.errors import JenkinsJobsException
+import jenkins_jobs.version
+
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger()
@@ -46,6 +50,9 @@ query_plugins_info=True
 [hipchat]
 authtoken=dummy
 send-as=Jenkins
+
+[__future__]
+param_order_from_yaml=False
 """
 
 
@@ -104,6 +111,9 @@ def create_parser():
     parser_update.add_argument('--delete-old', help='delete obsolete jobs',
                                action='store_true',
                                dest='delete_old', default=False,)
+    parser_update.add_argument('--workers', dest='n_workers', type=int,
+                               default=1, help='number of workers to use, 0 '
+                               'for autodetection and 1 for just one worker.')
 
     # subparser: test
     parser_test = subparser.add_parser('test', parents=[recursive_parser])
@@ -147,6 +157,15 @@ def create_parser():
         dest='allow_empty_variables', default=None,
         help='Don\'t fail if any of the variables inside any string are not '
         'defined, replace with empty string instead')
+    parser.add_argument(
+        '--user', '-u',
+        help='The Jenkins user to use for authentication. This overrides '
+        'the user specified in the configuration file')
+    parser.add_argument(
+        '--password', '-p',
+        help='Password or API token to use for authenticating towards '
+        'Jenkins. This overrides the password specified in the '
+        'configuration file.')
 
     return parser
 
@@ -172,17 +191,28 @@ def main(argv=None):
     execute(options, config)
 
 
-def setup_config_settings(options):
-
+def get_config_file(options):
+    # Initialize with the global fallback location for the config.
     conf = '/etc/jenkins_jobs/jenkins_jobs.ini'
     if options.conf:
         conf = options.conf
     else:
-        # Fallback to script directory
+        # Allow a script directory config to override.
         localconf = os.path.join(os.path.dirname(__file__),
                                  'jenkins_jobs.ini')
         if os.path.isfile(localconf):
             conf = localconf
+        # Allow a user directory config to override.
+        userconf = os.path.join(os.path.expanduser('~'), '.config',
+                                'jenkins_jobs', 'jenkins_jobs.ini')
+        if os.path.isfile(userconf):
+            conf = userconf
+    return conf
+
+
+def setup_config_settings(options):
+
+    conf = get_config_file(options)
     config = configparser.ConfigParser()
     # Load default config always
     config.readfp(StringIO(DEFAULT_CONF))
@@ -225,15 +255,21 @@ def execute(options, config):
     #
     # catching 'TypeError' is a workaround for python 2.6 interpolation error
     # https://bugs.launchpad.net/openstack-ci/+bug/1259631
-    try:
-        user = config.get('jenkins', 'user')
-    except (TypeError, configparser.NoOptionError):
-        user = None
+    if options.user:
+        user = options.user
+    else:
+        try:
+            user = config.get('jenkins', 'user')
+        except (TypeError, configparser.NoOptionError):
+            user = None
 
-    try:
-        password = config.get('jenkins', 'password')
-    except (TypeError, configparser.NoOptionError):
-        password = None
+    if options.password:
+        password = options.password
+    else:
+        try:
+            password = config.get('jenkins', 'password')
+        except (TypeError, configparser.NoOptionError):
+            password = None
 
     # Inform the user as to what is likely to happen, as they may specify
     # a real jenkins instance in test mode to get the plugin info to check
@@ -325,17 +361,23 @@ def execute(options, config):
         logger.info("Deleting all jobs")
         builder.delete_all_jobs()
     elif options.command == 'update':
+        if options.n_workers < 0:
+            raise JenkinsJobsException(
+                'Number of workers must be equal or greater than 0')
+
         logger.info("Updating jobs in {0} ({1})".format(
             options.path, options.names))
-        jobs, num_updated_jobs = builder.update_job(options.path,
-                                                    options.names)
+        jobs, num_updated_jobs = builder.update_jobs(
+            options.path, options.names,
+            n_workers=options.n_workers)
         logger.info("Number of jobs updated: %d", num_updated_jobs)
         if options.delete_old:
             num_deleted_jobs = builder.delete_old_managed()
             logger.info("Number of jobs deleted: %d", num_deleted_jobs)
     elif options.command == 'test':
-        builder.update_job(options.path, options.name,
-                           output=options.output_dir)
+        builder.update_jobs(options.path, options.name,
+                            output=options.output_dir,
+                            n_workers=1)
 
 
 def version():

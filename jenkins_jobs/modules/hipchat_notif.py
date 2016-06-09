@@ -15,6 +15,10 @@
 """
 Enable HipChat notifications of build execution.
 
+Supports hipchat plugin versions < 1.9. Will automatically redirect to the
+publishers module for newer versions, but still recommended that you convert
+to the newer module.
+
 :Parameters:
   * **enabled** *(bool)*: general cut off switch. If not explicitly set to
     ``true``, no hipchat parameters are written to XML. For Jenkins HipChat
@@ -49,6 +53,7 @@ Enable HipChat notifications of build execution.
     normal after being unstable or failed (Jenkins HipChat plugin >= 0.1.5)
     (default false)
 
+
 Example:
 
 .. literalinclude:: /../../tests/hipchat/fixtures/hipchat001.yaml
@@ -68,13 +73,16 @@ Example:
 # The global config object is therefore passed down to the registry object,
 # and this object is passed to the HipChat() class initialiser.
 
-import xml.etree.ElementTree as XML
-import jenkins_jobs.modules.base
-import jenkins_jobs.errors
 import logging
 import pkg_resources
-from six.moves import configparser
 import sys
+import xml.etree.ElementTree as XML
+
+from six.moves import configparser
+
+import jenkins_jobs.errors
+import jenkins_jobs.modules.base
+
 
 logger = logging.getLogger(__name__)
 
@@ -114,22 +122,40 @@ class HipChat(jenkins_jobs.modules.base.Base):
             return
         self._load_global_data()
 
+        # convert for compatibility before dispatch
+        if 'room' in hipchat:
+            if 'rooms' in hipchat:
+                logger.warn("Ignoring deprecated 'room' as 'rooms' also "
+                            "defined.")
+            else:
+                logger.warn("'room' is deprecated, please use 'rooms'")
+                hipchat['rooms'] = [hipchat['room']]
+
         plugin_info = self.registry.get_plugin_info("Jenkins HipChat Plugin")
         version = pkg_resources.parse_version(plugin_info.get('version', '0'))
 
-        properties = xml_parent.find('properties')
-        if properties is None:
-            properties = XML.SubElement(xml_parent, 'properties')
-        pdefhip = XML.SubElement(properties,
-                                 'jenkins.plugins.hipchat.'
-                                 'HipChatNotifier_-HipChatJobProperty')
+        if version >= pkg_resources.parse_version("0.1.9"):
+            publishers = xml_parent.find('publishers')
+            if publishers is None:
+                publishers = XML.SubElement(xml_parent, 'publishers')
+
+            logger.warn(
+                "'hipchat' module supports the old plugin versions <1.9, "
+                "newer versions are supported via the 'publishers' module. "
+                "Please upgrade you job definition")
+            return self.registry.dispatch('publisher', parser, publishers,
+                                          data)
+        else:
+            properties = xml_parent.find('properties')
+            if properties is None:
+                properties = XML.SubElement(xml_parent, 'properties')
+            pdefhip = XML.SubElement(properties,
+                                     'jenkins.plugins.hipchat.'
+                                     'HipChatNotifier_-HipChatJobProperty')
 
         room = XML.SubElement(pdefhip, 'room')
         if 'rooms' in hipchat:
             room.text = ",".join(hipchat['rooms'])
-        elif 'room' in hipchat:
-            logger.warn("'room' is deprecated, please use 'rooms'")
-            room.text = hipchat['room']
 
         # Handle backwards compatibility 'start-notify' but all add an element
         # of standardization with notify-*

@@ -95,16 +95,15 @@ character.
 import functools
 import io
 import logging
-import re
 import os
+import re
+
 import yaml
 from yaml.constructor import BaseConstructor
 from yaml import YAMLObject
 
-try:
-    from collections import OrderedDict
-except ImportError:
-    from ordereddict import OrderedDict
+from collections import OrderedDict
+
 
 logger = logging.getLogger(__name__)
 

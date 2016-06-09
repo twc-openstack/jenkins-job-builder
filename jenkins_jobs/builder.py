@@ -16,20 +16,25 @@
 # Manage jobs in Jenkins server
 
 import errno
-import io
-import os
-import operator
 import hashlib
-import yaml
-import xml.etree.ElementTree as XML
-import jenkins
-import re
-from pprint import pformat
+import io
 import logging
+import operator
+import os
+from pprint import pformat
+import re
+import tempfile
+import time
+import xml.etree.ElementTree as XML
+import yaml
+
+import jenkins
 
 from jenkins_jobs.constants import MAGIC_MANAGE_STRING
+from jenkins_jobs.parallel import parallelize
 from jenkins_jobs.parser import YamlParser
 from jenkins_jobs import utils
+
 
 logger = logging.getLogger(__name__)
 
@@ -41,8 +46,10 @@ class CacheStorage(object):
     # modules so that they are available to be used when the destructor
     # is being called since python will not guarantee that it won't have
     # removed global module references during teardown.
-    _yaml = yaml
     _logger = logger
+    _os = os
+    _tempfile = tempfile
+    _yaml = yaml
 
     def __init__(self, jenkins_url, flush=False):
         cache_dir = self.get_cache_dir()
@@ -93,23 +100,35 @@ class CacheStorage(object):
         return True
 
     def save(self):
-        # check we initialized sufficiently in case called via __del__
+        # use self references to required modules in case called via __del__
+        # write to tempfile under same directory and then replace to avoid
+        # issues around corruption such the process be killed
+        tfile = self._tempfile.NamedTemporaryFile(dir=self.get_cache_dir(),
+                                                  delete=False)
+        tfile.write(self._yaml.dump(self.data).encode('utf-8'))
+        # force contents to be synced on disk before overwriting cachefile
+        tfile.flush()
+        self._os.fsync(tfile.fileno())
+        tfile.close()
+        try:
+            self._os.rename(tfile.name, self.cachefilename)
+        except OSError:
+            # On Windows, if dst already exists, OSError will be raised even if
+            # it is a file. Remove the file first in that case and try again.
+            self._os.remove(self.cachefilename)
+            self._os.rename(tfile.name, self.cachefilename)
+
+        self._logger.debug("Cache written out to '%s'" % self.cachefilename)
+
+    def __del__(self):
+        # check we initialized sufficiently in case called
         # due to an exception occurring in the __init__
         if getattr(self, 'data', None) is not None:
             try:
-                with io.open(self.cachefilename, 'w',
-                             encoding='utf-8') as yfile:
-                    self._yaml.dump(self.data, yfile)
+                self.save()
             except Exception as e:
                 self._logger.error("Failed to write to cache file '%s' on "
                                    "exit: %s" % (self.cachefilename, e))
-            else:
-                self._logger.info("Cache saved")
-                self._logger.debug("Cache written out to '%s'" %
-                                   self.cachefilename)
-
-    def __del__(self):
-        self.save()
 
 
 class Jenkins(object):
@@ -135,6 +154,7 @@ class Jenkins(object):
             self._job_list = set(job['name'] for job in self.jobs)
         return self._job_list
 
+    @parallelize
     def update_job(self, job_name, xml):
         if self.is_job(job_name):
             logger.info("Reconfiguring jenkins job {0}".format(job_name))
@@ -153,7 +173,7 @@ class Jenkins(object):
 
     def get_job_md5(self, job_name):
         xml = self.jenkins.get_job_config(job_name)
-        return hashlib.md5(xml).hexdigest()
+        return hashlib.md5(xml.encode('utf-8')).hexdigest()
 
     def delete_job(self, job_name):
         if self.is_job(job_name):
@@ -163,7 +183,7 @@ class Jenkins(object):
     def delete_all_jobs(self):
         # execute a groovy script to delete all jobs is much faster than
         # using the doDelete REST endpoint to delete one job at a time.
-        script = ('for(job in jenkins.model.Jenkins.theInstance.getProjects())'
+        script = ('for(job in jenkins.model.Jenkins.theInstance.getAllItems())'
                   '       { job.delete(); }')
         self.jenkins.run_script(script)
 
@@ -278,15 +298,17 @@ class Builder(object):
         if keep is None:
             keep = [job.name for job in self.parser.xml_jobs]
         for job in jobs:
-            if job['name'] not in keep and \
-                    self.jenkins.is_managed(job['name']):
-                logger.info("Removing obsolete jenkins job {0}"
-                            .format(job['name']))
-                self.delete_job(job['name'])
-                deleted_jobs += 1
+            if job['name'] not in keep:
+                if self.jenkins.is_managed(job['name']):
+                    logger.info("Removing obsolete jenkins job {0}"
+                                .format(job['name']))
+                    self.delete_job(job['name'])
+                    deleted_jobs += 1
+                else:
+                    logger.info("Not deleting unmanaged jenkins job %s",
+                                job['name'])
             else:
-                logger.debug("Ignoring unmanaged jenkins job %s",
-                             job['name'])
+                logger.debug("Keeping job %s", job['name'])
         return deleted_jobs
 
     def delete_job(self, jobs_glob, fn=None):
@@ -303,6 +325,7 @@ class Builder(object):
             self.jenkins.delete_job(job)
             if(self.cache.is_cached(job)):
                 self.cache.set(job, '')
+        self.cache.save()
 
     def delete_all_jobs(self):
         jobs = self.jenkins.get_jobs()
@@ -311,10 +334,23 @@ class Builder(object):
         # Need to clear the JJB cache after deletion
         self.cache.clear()
 
-    def update_job(self, input_fn, jobs_glob=None, output=None):
+    @parallelize
+    def changed(self, job):
+        md5 = job.md5()
+        changed = self.ignore_cache or self.cache.has_changed(job.name, md5)
+        if not changed:
+            logger.debug("'{0}' has not changed".format(job.name))
+        return changed
+
+    def update_jobs(self, input_fn, jobs_glob=None, output=None,
+                    n_workers=None):
+        orig = time.time()
         self.load_files(input_fn)
         self.parser.expandYaml(jobs_glob)
         self.parser.generateXML()
+        step = time.time()
+        logging.debug('%d XML files generated in %ss',
+                      len(self.parser.jobs), str(step - orig))
 
         logger.info("Number of jobs generated:  %d", len(self.parser.xml_jobs))
         self.parser.xml_jobs.sort(key=operator.attrgetter('name'))
@@ -328,14 +364,16 @@ class Builder(object):
                 if not os.path.isdir(output):
                     raise
 
-        updated_jobs = 0
-        for job in self.parser.xml_jobs:
-            if output:
+        if output:
+            # ensure only wrapped once
+            if hasattr(output, 'write'):
+                output = utils.wrap_stream(output)
+
+            for job in self.parser.xml_jobs:
                 if hasattr(output, 'write'):
                     # `output` is a file-like object
                     logger.info("Job name:  %s", job.name)
                     logger.debug("Writing XML to '{0}'".format(output))
-                    output = utils.wrap_stream(output)
                     try:
                         output.write(job.output())
                     except IOError as exc:
@@ -351,17 +389,54 @@ class Builder(object):
                 logger.debug("Writing XML to '{0}'".format(output_fn))
                 with io.open(output_fn, 'w', encoding='utf-8') as f:
                     f.write(job.output().decode('utf-8'))
-                continue
-            md5 = job.md5()
-            if (self.jenkins.is_job(job.name)
-                    and not self.cache.is_cached(job.name)):
-                old_md5 = self.jenkins.get_job_md5(job.name)
-                self.cache.set(job.name, old_md5)
+            return self.parser.xml_jobs, len(self.parser.xml_jobs)
 
-            if self.cache.has_changed(job.name, md5) or self.ignore_cache:
-                self.jenkins.update_job(job.name, job.output().decode('utf-8'))
-                updated_jobs += 1
-                self.cache.set(job.name, md5)
+        # Filter out the jobs that did not change
+        logging.debug('Filtering %d jobs for changed jobs',
+                      len(self.parser.xml_jobs))
+        step = time.time()
+        jobs = [job for job in self.parser.xml_jobs
+                if self.changed(job)]
+        logging.debug("Filtered for changed jobs in %ss",
+                      (time.time() - step))
+
+        if not jobs:
+            return [], 0
+
+        # Update the jobs
+        logging.debug('Updating jobs')
+        step = time.time()
+        p_params = [{'job': job} for job in jobs]
+        results = self.parallel_update_job(
+            n_workers=n_workers,
+            parallelize=p_params)
+        logging.debug("Parsing results")
+        # generalize the result parsing, as a parallelized job always returns a
+        # list
+        if len(p_params) in (1, 0):
+            results = [results]
+        for result in results:
+            if isinstance(result, Exception):
+                raise result
             else:
-                logger.debug("'{0}' has not changed".format(job.name))
-        return self.parser.xml_jobs, updated_jobs
+                # update in-memory cache
+                j_name, j_md5 = result
+                self.cache.set(j_name, j_md5)
+        # write cache to disk
+        self.cache.save()
+        logging.debug("Updated %d jobs in %ss",
+                      len(jobs),
+                      time.time() - step)
+        logging.debug("Total run took %ss", (time.time() - orig))
+        return jobs, len(jobs)
+
+    @parallelize
+    def parallel_update_job(self, job):
+        self.jenkins.update_job(job.name, job.output().decode('utf-8'))
+        return (job.name, job.md5())
+
+    def update_job(self, input_fn, jobs_glob=None, output=None):
+        logging.warn('Current update_job function signature is deprecated and '
+                     'will change in future versions to the signature of the '
+                     'new parallel_update_job')
+        return self.update_jobs(input_fn, jobs_glob, output)

@@ -2,10 +2,10 @@ Configuration File
 ------------------
 
 After installation, you will need to create a configuration file.  By
-default, ``jenkins-jobs`` looks in
-``/etc/jenkins_jobs/jenkins_jobs.ini`` but you may specify an
-alternative location when running ``jenkins-jobs``.  The file should have
-the following format:
+default, ``jenkins-jobs`` looks for ``~/.config/jenkins_jobs/jenkins_jobs.ini``,
+``<script directory>/jenkins_jobs.ini`` or ``/etc/jenkins_jobs/jenkins_jobs.ini``
+(in that order), but you may specify an alternative location when running
+``jenkins-jobs``.  The file should have the following format:
 
 .. literalinclude:: ../../etc/jenkins_jobs.ini-sample
    :language: ini
@@ -114,6 +114,20 @@ stash section
   yaml part.
 
 
+__future__ section
+^^^^^^^^^^^^^^^^^^
+
+This section is to control enabling of beta features or behaviour changes that
+deviate from previously released behaviour in ways that may require effort to
+convert existing JJB configs to adopt. This essentially will act as a method
+to share these new behaviours while under active development so they can be
+changed ahead of releases.
+
+**param_order_from_yaml**
+  Used to switch on using the order of the parameters are defined in yaml to
+  control the order of corresponding XML elements being written out. This is
+  intended as a global flag and can affect multiple modules.
+
 
 Running
 -------
@@ -159,6 +173,13 @@ To update a specific list of jobs, simply pass the job names as additional
 arguments after the job definition path. To update Foo1 and Foo2 run::
 
   jenkins-jobs update /path/to/defs Foo1 Foo2
+
+You can also enable the parallel execution of the program passing the workers
+option with a value of 0, 2, or higher. Use 0 to run as many workers as cores
+in the host that runs it, and 2 or higher to specify the number of workers to
+use::
+
+  jenkins-jobs update --workers 0 /path/to/defs
 
 Passing Multiple Paths
 ^^^^^^^^^^^^^^^^^^^^^^

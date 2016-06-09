@@ -1,0 +1,6 @@
+properties:
+  - throttle:
+      categories:
+        - cat1
+        - cat2
+      option: project

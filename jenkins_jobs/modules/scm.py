@@ -38,11 +38,12 @@ Example of an empty ``scm``:
 
 import logging
 import xml.etree.ElementTree as XML
+
+from jenkins_jobs.errors import InvalidAttributeError
+from jenkins_jobs.errors import JenkinsJobsException
+from jenkins_jobs.errors import MissingAttributeError
 import jenkins_jobs.modules.base
 from jenkins_jobs.modules.helpers import convert_mapping_to_xml
-from jenkins_jobs.errors import (InvalidAttributeError,
-                                 JenkinsJobsException,
-                                 MissingAttributeError)
 
 
 def git(parser, xml_parent, data):
@@ -115,9 +116,9 @@ def git(parser, xml_parent, data):
 
         :browsers supported:
             * **auto** - (default)
-            * **assemblaweb** - https://www.assembla.com/
-            * **bitbucketweb** - https://www.bitbucket.org/
-            * **cgit** - http://git.zx2c4.com/cgit/about/
+            * **assemblaweb** - https://www.assembla.com/home
+            * **bitbucketweb** - https://bitbucket.org/
+            * **cgit** - https://git.zx2c4.com/cgit/about/
             * **fisheye** - https://www.atlassian.com/software/fisheye
             * **gitblit** - http://gitblit.com/
             * **githubweb** - https://github.com/
@@ -125,13 +126,13 @@ def git(parser, xml_parent, data):
             * **gitlab** - https://about.gitlab.com/
             * **gitlist** - http://gitlist.org/
             * **gitoriousweb** - https://gitorious.org/
-            * **gitweb** - http://git-scm.com/docs/gitweb
+            * **gitweb** - https://git-scm.com/docs/gitweb
             * **kiln** - https://www.fogcreek.com/kiln/
             * **microsoft\-tfs\-2013** - |tfs_2013|
             * **phabricator** - http://phabricator.org/
             * **redmineweb** - http://www.redmine.org/
             * **rhodecode** - https://rhodecode.com/
-            * **stash** - https://www.atlassian.com/software/stash
+            * **stash** - https://www.atlassian.com/software/bitbucket/server
             * **viewgit** - http://viewgit.fealdia.org/
     :arg str browser-url: url for the repository browser (required if browser
         is not 'auto', no default)
@@ -170,6 +171,8 @@ def git(parser, xml_parent, data):
             * **tracking** (`bool`) - Retrieve the tip of the configured
               branch in .gitmodules (Uses '\-\-remote' option which requires
               git>=1.8.2)
+            * **reference-repo** (`str`) - Path of the reference repo to use
+              during clone (optional)
             * **timeout** (`int`) - Specify a timeout (in minutes) for
               submodules operations (default: 10).
         * **timeout** (`str`) - Timeout for git commands in minutes (optional)
@@ -368,6 +371,8 @@ def git(parser, xml_parent, data):
             data['submodule'].get('recursive', False)).lower()
         XML.SubElement(ext, 'trackingSubmodules').text = str(
             data['submodule'].get('tracking', False)).lower()
+        XML.SubElement(ext, 'reference').text = str(
+            data['submodule'].get('reference-repo', ''))
         XML.SubElement(ext, 'timeout').text = str(
             data['submodule'].get('timeout', 10))
     if 'timeout' in data:
@@ -574,10 +579,23 @@ def repo(parser, xml_parent, data):
     :arg str mirror-dir: Path to mirror directory to reference when
         initialising (optional)
     :arg int jobs: Number of projects to fetch simultaneously (default 0)
+    :arg int depth: Specify the depth in history to sync from the source. The
+        default is to sync all of the history. Use 1 to just sync the most
+        recent commit (default 0)
     :arg bool current-branch: Fetch only the current branch from the server
         (default true)
+    :arg bool reset-first: Remove any commits that are not on the repositories
+        by running the following command before anything else (default false):
+        ``repo forall -c "git reset --hard"``
     :arg bool quiet: Make repo more quiet
         (default true)
+    :arg bool force-sync: Continue sync even if a project fails to sync
+        (default false)
+    :arg bool no-tags: Don't fetch tags (default false)
+    :arg bool trace: Trace git command execution into the build logs. (default
+        false)
+    :arg bool show-all-changes: When this is checked --first-parent is no
+        longer passed to git log when determining changesets (default false)
     :arg str local-manifest: Contents of .repo/local_manifest.xml, written
         prior to calling sync (optional)
 
@@ -604,8 +622,14 @@ def repo(parser, xml_parent, data):
         ("repo-url", 'repoUrl', ''),
         ("mirror-dir", 'mirrorDir', ''),
         ("jobs", 'jobs', 0),
+        ("depth", 'depth', 0),
         ("current-branch", 'currentBranch', True),
+        ("reset-first", 'resetFirst', False),
         ("quiet", 'quiet', True),
+        ("force-sync", 'forceSync', False),
+        ("no-tags", 'noTags', False),
+        ("trace", 'trace', False),
+        ("show-all-changes", 'showAllChanges', False),
         ("local-manifest", 'localManifest', ''),
     ]
 
@@ -970,7 +994,7 @@ def hg(self, xml_parent, data):
 
         :browsers supported:
             * **auto** - (default)
-            * **bitbucketweb** - https://www.bitbucket.org/
+            * **bitbucketweb** - https://bitbucket.org/
             * **fisheye** - https://www.atlassian.com/software/fisheye
             * **googlecode** - https://code.google.com/
             * **hgweb** - https://www.selenic.com/hg/help/hgweb
@@ -1057,8 +1081,8 @@ def openshift_img_streams(parser, xml_parent, data):
     OpenShift ImageStreams (which are abstractions of Docker repositories)
     and SCMs - versions / commit IDs of related artifacts
     (images vs. programmatics files)
-    Requires the Jenkins `OpenShift3 Plugin
-    <https://github.com/gabemontero/openshift-jenkins-buildutils/>`_
+    Requires the Jenkins :jenkins-wiki:`OpenShift
+    Pipeline Plugin <OpenShift+Pipeline+Plugin>`._
 
     :arg str image-stream-name: The name of the ImageStream is what shows up
         in the NAME column if you dump all the ImageStream's with the
@@ -1073,6 +1097,8 @@ def openshift_img_streams(parser, xml_parent, data):
         a Build on. (default: test)
     :arg str auth-token: The value here is what you supply with the --token
         option when invoking the OpenShift `oc` command. (optional)
+    :arg str verbose: This flag is the toggle for
+        turning on or off detailed logging in this plug-in. (optional)
 
     Full Example:
 
@@ -1088,7 +1114,7 @@ def openshift_img_streams(parser, xml_parent, data):
     """
     scm = XML.SubElement(xml_parent,
                          'scm', {'class':
-                                 'com.openshift.openshiftjenkinsbuildutils.'
+                                 'com.openshift.jenkins.plugins.pipeline.'
                                  'OpenShiftImageStreams'})
     mapping = [
         # option, xml name, default value
@@ -1097,9 +1123,102 @@ def openshift_img_streams(parser, xml_parent, data):
         ("api-url", 'apiURL', 'https://openshift.default.svc.cluster.local'),
         ("namespace", 'namespace', 'test'),
         ("auth-token", 'authToken', ''),
+        ("verbose", 'verbose', ''),
     ]
 
     convert_mapping_to_xml(scm, data, mapping)
+
+
+def bzr(parser, xml_parent, data):
+    """yaml: bzr
+    Specifies the bzr SCM repository for this job.
+    Requires the Jenkins :jenkins-wiki:`Bazaar Plugin <Bazaar+Plugin>`.
+
+    :arg str url: URL of the bzr branch
+    :arg bool clean-tree: Clean up the workspace (using bzr) before pulling
+        the branch (default: false)
+    :arg bool lightweight-checkout: Use a lightweight checkout instead of a
+        full branch (default: false)
+    :arg str browser: The repository browser to use.
+
+        :browsers supported:
+            * **auto** - (default)
+            * **loggerhead** - as used by Launchpad
+            * **opengrok** - https://opengrok.github.io/OpenGrok/
+
+    :arg str browser-url:
+        URL for the repository browser (required if browser is set).
+
+    :arg str opengrok-root-module:
+        Root module for OpenGrok (required if browser is opengrok).
+
+    Example:
+
+    .. literalinclude:: /../../tests/scm/fixtures/bzr001.yaml
+    """
+    if 'url' not in data:
+        raise JenkinsJobsException('Must specify a url for bzr scm')
+    mapping = [
+        # option, xml name, default value (text), attributes (hard coded)
+        ('url', 'source', ''),
+        ('clean-tree', 'cleantree', False),
+        ('lightweight-checkout', 'checkout', False),
+    ]
+    scm_element = XML.SubElement(
+        xml_parent, 'scm', {'class': 'hudson.plugins.bazaar.BazaarSCM'})
+    convert_mapping_to_xml(scm_element, data, mapping)
+
+    browser_name_to_class = {
+        'loggerhead': 'Loggerhead',
+        'opengrok': 'OpenGrok',
+    }
+    browser = data.get('browser', 'auto')
+    if browser == 'auto':
+        return
+    if browser not in browser_name_to_class:
+        raise InvalidAttributeError('browser', browser,
+                                    browser_name_to_class.keys())
+    browser_element = XML.SubElement(
+        scm_element,
+        'browser',
+        {'class': 'hudson.plugins.bazaar.browsers.{0}'.format(
+            browser_name_to_class[browser])})
+    XML.SubElement(browser_element, 'url').text = data['browser-url']
+    if browser == 'opengrok':
+        XML.SubElement(browser_element, 'rootModule').text = (
+            data['opengrok-root-module'])
+
+
+def url(parser, xml_parent, data):
+    """yaml: url
+
+    Watch for changes in, and download an artifact from a particular url.
+    Requires the Jenkins :jenkins-wiki:`URL SCM <URL+SCM>`.
+
+    :arg list url-list: List of URLs to watch. (required)
+    :arg bool clear-workspace: If set to true, clear the workspace before
+        downloading the artifact(s) specified in url-list. (default false)
+
+    Examples:
+
+    .. literalinclude:: ../../tests/scm/fixtures/url001.yaml
+       :language: yaml
+    .. literalinclude:: ../../tests/scm/fixtures/url002.yaml
+       :language: yaml
+    """
+
+    scm = XML.SubElement(xml_parent, 'scm', {'class':
+                         'hudson.plugins.URLSCM.URLSCM'})
+    urls = XML.SubElement(scm, 'urls')
+    try:
+        for data_url in data['url-list']:
+            url_tuple = XML.SubElement(
+                urls, 'hudson.plugins.URLSCM.URLSCM_-URLTuple')
+            XML.SubElement(url_tuple, 'urlString').text = data_url
+    except KeyError as e:
+        raise MissingAttributeError(e.args[0])
+    XML.SubElement(scm, 'clearWorkspace').text = str(
+        data.get('clear-workspace', False)).lower()
 
 
 class SCM(jenkins_jobs.modules.base.Base):

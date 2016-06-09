@@ -32,11 +32,12 @@ Example::
           description: "A parameter named FOO, defaults to 'bar'."
 """
 
-
 import xml.etree.ElementTree as XML
-import jenkins_jobs.modules.base
+
 from jenkins_jobs.errors import JenkinsJobsException
 from jenkins_jobs.errors import MissingAttributeError
+from jenkins_jobs.errors import InvalidAttributeError
+import jenkins_jobs.modules.base
 from jenkins_jobs.modules.helpers import copyartifact_build_selector
 
 
@@ -71,6 +72,36 @@ def string_param(parser, xml_parent, data):
     """
     base_param(parser, xml_parent, data, True,
                'hudson.model.StringParameterDefinition')
+
+
+def promoted_param(parser, xml_parent, data):
+    """yaml: promoted build
+    A promoted build parameter.
+    Requires the Jenkins :jenkins-wiki:`Promoted Builds Plugin
+    <Promoted+Builds+Plugin>`.
+
+    :arg str name: the name of the parameter (required)
+    :arg str project-name: the job from which the user can pick runs (required)
+    :arg str promotion-name: promotion process to choose from (optional)
+    :arg str description: a description of the parameter (optional)
+
+    Example:
+
+    .. literalinclude::
+        /../../tests/parameters/fixtures/promoted-build-param001.yaml
+       :language: yaml
+
+    """
+    pdef = base_param(parser, xml_parent, data, False,
+                      'hudson.plugins.promoted__builds.parameters.'
+                      'PromotedBuildParameterDefinition')
+    try:
+        XML.SubElement(pdef, 'projectName').text = data['project-name']
+    except KeyError:
+        raise MissingAttributeError('project-name')
+
+    XML.SubElement(pdef, 'promotionProcessName').text = data.get(
+        'promotion-name', None)
 
 
 def password_param(parser, xml_parent, data):
@@ -295,10 +326,16 @@ def extended_choice_param(parser, xml_parent, data):
         or multi-select box (optional, default '')
     :arg str default-value: used to set the initial selection of the
         single-select or multi-select box (optional, default '')
+    :arg str value-description: comma separated list of value descriptions
+        for the single select or multi-select box (optional, default '')
     :arg str default-property-file: location of property file when default
         value needs to come from a property file (optional, default '')
     :arg str default-property-key: key for the default property file
         (optional, default '')
+    :arg str description-property-file: location of property file when value
+        description needs to come from a property file (optional, default '')
+    :arg str description-property-key: key for the value description
+        property file (optional, default '')
     :arg str multi-select-delimiter: value between selections when the
         parameter is a multi-select (optiona, default ',')
 
@@ -322,7 +359,8 @@ def extended_choice_param(parser, xml_parent, data):
                                                   False)).lower()
     XML.SubElement(pdef, 'defaultValue').text = data.get(
         'default-value', '')
-
+    XML.SubElement(pdef, 'descriptionPropertyValue').text = data.get(
+        'value-description', '')
     choice = data.get('type', 'single-select')
     choicedict = {'single-select': 'PT_SINGLE_SELECT',
                   'multi-select': 'PT_MULTI_SELECT',
@@ -347,6 +385,10 @@ def extended_choice_param(parser, xml_parent, data):
         'default-property-file', '')
     XML.SubElement(pdef, 'defaultPropertyKey').text = data.get(
         'default-property-key', '')
+    XML.SubElement(pdef, 'descriptionPropertyFile').text = data.get(
+        'description-property-file', '')
+    XML.SubElement(pdef, 'descriptionPropertyKey').text = data.get(
+        'description-property-key', '')
 
 
 def validating_string_param(parser, xml_parent, data):
@@ -660,7 +702,7 @@ def matrix_combinations_param(parser, xml_parent, data):
 
 
 def copyartifact_build_selector_param(parser, xml_parent, data):
-    """yaml: copyartifact-build-selector-param
+    """yaml: copyartifact-build-selector
 
     Control via a build parameter, which build the copyartifact plugin should
     copy when it is configured to use 'build-param'. Requires the Jenkins
@@ -692,6 +734,70 @@ def copyartifact_build_selector_param(parser, xml_parent, data):
     XML.SubElement(t, 'description').text = data.get('description', '')
 
     copyartifact_build_selector(t, data, 'defaultSelector')
+
+
+def maven_metadata_param(parser, xml_parent, data):
+    """yaml: maven-metadata
+    This parameter allows the resolution of maven artifact versions
+    by contacting the repository and reading the maven-metadata.xml.
+    Requires the Jenkins :jenkins-wiki:`Maven Metadata Plugin
+    <Maven+Metadata+Plugin>`.
+
+    :arg str name: Name of the parameter
+    :arg str description: Description of the parameter (optional)
+    :arg str repository-base-url: URL from where you retrieve your artifacts
+        (default '')
+    :arg str repository-username: Repository's username if authentication is
+        required. (default '')
+    :arg str repository-password: Repository's password if authentication is
+        required. (default '')
+    :arg str artifact-group-id: Unique project identifier (default '')
+    :arg str artifact-id: Name of the artifact without version (default '')
+    :arg str packaging: Artifact packaging option. Could be something such as
+        jar, zip, pom.... (default '')
+    :arg str versions-filter: Specify a regular expression which will be used
+        to filter the versions which are actually displayed when triggering a
+        new build. (default '')
+    :arg str default-value: For features such as SVN polling a default value
+        is required. If job will only be started manually, this field is not
+        necessary. (default '')
+    :arg str maximum-versions-to-display: The maximum number of versions to
+        display in the drop-down. Any non-number value as well as 0 or negative
+        values will default to all. (default 10)
+    :arg str sorting-order: ascending or descending
+        (default descending)
+
+    Example:
+
+    .. literalinclude::
+       /../../tests/parameters/fixtures/maven-metadata-param001.yaml
+       :language: yaml
+
+    """
+    pdef = base_param(parser, xml_parent, data, False,
+                      'eu.markov.jenkins.plugin.mvnmeta.'
+                      'MavenMetadataParameterDefinition')
+    XML.SubElement(pdef, 'repoBaseUrl').text = data.get('repository-base-url',
+                                                        '')
+    XML.SubElement(pdef, 'groupId').text = data.get('artifact-group-id', '')
+    XML.SubElement(pdef, 'artifactId').text = data.get('artifact-id', '')
+    XML.SubElement(pdef, 'packaging').text = data.get('packaging', '')
+    XML.SubElement(pdef, 'defaultValue').text = data.get('default-value', '')
+    XML.SubElement(pdef, 'versionFilter').text = data.get('versions-filter',
+                                                          '')
+
+    sort_order = data.get('sorting-order', 'descending').lower()
+    sort_dict = {'descending': 'DESC',
+                 'ascending': 'ASC'}
+
+    if sort_order not in sort_dict:
+        raise InvalidAttributeError(sort_order, sort_order, sort_dict.keys())
+
+    XML.SubElement(pdef, 'sortOrder').text = sort_dict[sort_order]
+    XML.SubElement(pdef, 'maxVersions').text = str(data.get(
+        'maximum-versions-to-display', 10))
+    XML.SubElement(pdef, 'username').text = data.get('repository-username', '')
+    XML.SubElement(pdef, 'password').text = data.get('repository-password', '')
 
 
 class Parameters(jenkins_jobs.modules.base.Base):

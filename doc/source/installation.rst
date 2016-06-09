@@ -1,9 +1,20 @@
 Installation
 ============
 
-To install Jenkins Job Builder, run::
+To install Jenkins Job Builder from source, run::
 
-  sudo python setup.py install
+  pip install --user jenkins-job-builder
+
+A virtual environment is recommended for development.  For example, Jenkins
+Job Builder may be installed from the top level directory::
+
+    $ virtualenv .venv
+    $ source .venv/bin/activate
+    $ pip install -r test-requirements.txt -e .
+
+Alternatively, the current release can be installed from pypi::
+
+  sudo pip install jenkins-job-builder
 
 The OpenStack project uses Puppet to manage its infrastructure
 systems, including Jenkins.  If you use Puppet, you can use the

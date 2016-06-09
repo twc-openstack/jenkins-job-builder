@@ -6,10 +6,10 @@ import jenkins
 
 from jenkins_jobs import cmd
 from jenkins_jobs.errors import JenkinsJobsException
+from mock import patch
 from tests.base import mock
 from tests.cmd.test_cmd import CmdTestsBase
 from tests.cmd.test_recurse_path import fake_os_walk
-
 
 os_walk_return_values = {
     '/jjb_projects': [
@@ -44,6 +44,30 @@ def os_walk_side_effects(path_name, topdown):
 
 
 @mock.patch('jenkins_jobs.builder.Jenkins.get_plugins_info', mock.MagicMock)
+class TestConfigs(CmdTestsBase):
+
+    def test_use_global_config(self):
+        """
+        Verify that JJB uses the global config file by default
+        """
+        args = self.parser.parse_args(['test', 'foo'])
+        self.assertEqual(cmd.get_config_file(args),
+                         '/etc/jenkins_jobs/jenkins_jobs.ini')
+
+    def test_use_config_in_user_home(self):
+        """
+        Verify that JJB uses config file in user home folder
+        """
+        args = self.parser.parse_args(['test', 'foo'])
+        # args.output_dir = mock.MagicMock()
+        # mock_isfile.side_effect = True
+        expected_loc = os.path.join(os.path.expanduser('~'), '.config',
+                                    'jenkins_jobs', 'jenkins_jobs.ini')
+        with patch('os.path.isfile', return_value=True):
+            self.assertEqual(cmd.get_config_file(args), expected_loc)
+
+
+@mock.patch('jenkins_jobs.builder.Jenkins.get_plugins_info', mock.MagicMock)
 class TestTests(CmdTestsBase):
 
     def test_non_existing_config_dir(self):
@@ -71,7 +95,7 @@ class TestTests(CmdTestsBase):
                                        os.path.join(self.fixtures_path,
                                                     'cmd-001.yaml'),
                                        'invalid'])
-        args.output_dir = mock.MagicMock()
+        args.output_dir = mock.MagicMock(wraps=io.BytesIO())
         cmd.execute(args, self.config)   # probably better to fail here
 
     def test_valid_job(self):
@@ -85,8 +109,8 @@ class TestTests(CmdTestsBase):
         args.output_dir = mock.Mock(wraps=io.BytesIO())
         cmd.execute(args, self.config)   # probably better to fail here
 
-    @mock.patch('jenkins_jobs.cmd.Builder.update_job')
-    def test_multi_path(self, update_job_mock):
+    @mock.patch('jenkins_jobs.cmd.Builder.update_jobs')
+    def test_multi_path(self, update_jobs_mock):
         """
         Run test mode and pass multiple paths.
         """
@@ -98,14 +122,15 @@ class TestTests(CmdTestsBase):
 
         cmd.execute(args, self.config)
         self.assertEqual(args.path, path_list)
-        update_job_mock.assert_called_with(path_list, [],
-                                           output=args.output_dir)
+        update_jobs_mock.assert_called_with(path_list, [],
+                                            output=args.output_dir,
+                                            n_workers=mock.ANY)
 
-    @mock.patch('jenkins_jobs.cmd.Builder.update_job')
+    @mock.patch('jenkins_jobs.cmd.Builder.update_jobs')
     @mock.patch('jenkins_jobs.cmd.os.path.isdir')
     @mock.patch('jenkins_jobs.cmd.os.walk')
     def test_recursive_multi_path(self, os_walk_mock, isdir_mock,
-                                  update_job_mock):
+                                  update_jobs_mock):
         """
         Run test mode and pass multiple paths with recursive path option.
         """
@@ -125,20 +150,22 @@ class TestTests(CmdTestsBase):
 
         cmd.execute(args, self.config)
 
-        update_job_mock.assert_called_with(paths, [], output=args.output_dir)
+        update_jobs_mock.assert_called_with(paths, [], output=args.output_dir,
+                                            n_workers=mock.ANY)
 
         args = self.parser.parse_args(['test', multipath])
         args.output_dir = mock.MagicMock()
         self.config.set('job_builder', 'recursive', 'True')
         cmd.execute(args, self.config)
 
-        update_job_mock.assert_called_with(paths, [], output=args.output_dir)
+        update_jobs_mock.assert_called_with(paths, [], output=args.output_dir,
+                                            n_workers=mock.ANY)
 
-    @mock.patch('jenkins_jobs.cmd.Builder.update_job')
+    @mock.patch('jenkins_jobs.cmd.Builder.update_jobs')
     @mock.patch('jenkins_jobs.cmd.os.path.isdir')
     @mock.patch('jenkins_jobs.cmd.os.walk')
     def test_recursive_multi_path_with_excludes(self, os_walk_mock, isdir_mock,
-                                                update_job_mock):
+                                                update_jobs_mock):
         """
         Run test mode and pass multiple paths with recursive path option.
         """
@@ -160,7 +187,8 @@ class TestTests(CmdTestsBase):
 
         cmd.execute(args, self.config)
 
-        update_job_mock.assert_called_with(paths, [], output=args.output_dir)
+        update_jobs_mock.assert_called_with(paths, [], output=args.output_dir,
+                                            n_workers=mock.ANY)
 
     def test_console_output(self):
         """
